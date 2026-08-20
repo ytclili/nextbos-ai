@@ -1,0 +1,4 @@
+{
+  "dependencies": ["."],
+  "graphs": {"main_agent": "app.agent.graph:graph"}
+}

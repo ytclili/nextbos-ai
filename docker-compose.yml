@@ -1,0 +1,18 @@
+services:
+  redis:
+    image: redis/redis-stack-server:7.4.0-v6
+    ports: ["6379:6379"]
+    environment:
+      REDIS_ARGS: "--appendonly yes --maxmemory-policy noeviction"
+    volumes: ["redis_data:/data"]
+  postgres:
+    image: pgvector/pgvector:pg16
+    ports: ["5432:5432"]
+    environment:
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent
+      POSTGRES_DB: agent_runtime
+    volumes: ["postgres_data:/var/lib/postgresql/data"]
+volumes:
+  redis_data:
+  postgres_data:

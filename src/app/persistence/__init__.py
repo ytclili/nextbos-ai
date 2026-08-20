@@ -1,0 +1,1 @@
+"""Agent-owned persistence adapters."""
