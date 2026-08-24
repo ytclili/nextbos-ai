@@ -1,1 +1,1 @@
-"""PostgreSQL infrastructure for long-term memory only."""
+"""PostgreSQL infrastructure for agent-owned runtime state."""

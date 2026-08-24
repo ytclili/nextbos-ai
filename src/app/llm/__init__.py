@@ -1,1 +1,1 @@
-"""LLM provider adapters; no provider is selected by the starter graph."""
+"""LLM 模型配置解析、服务入口和供应商适配器。"""
