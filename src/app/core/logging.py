@@ -1,5 +1,14 @@
 import logging
 
+NOISY_LIBRARY_LOGGERS = {
+    # Redis checkpoint 启动时会重复打印索引已存在、standalone client 等信息。
+    "redisvl.index.index": logging.WARNING,
+    "langgraph.checkpoint.redis.aio": logging.WARNING,
+    # LangChain/OpenAI/httpx 的 INFO 更多是 SDK 诊断，对业务排障意义不大。
+    "langchain_openai": logging.WARNING,
+    "httpx": logging.WARNING,
+}
+
 
 class OpenTelemetryLogFilter(logging.Filter):
     """给未启用 OTel 的日志补默认字段。
@@ -43,6 +52,7 @@ def _install_otel_safe_log_record_factory() -> None:
 
 def configure_logging(level: str = "INFO") -> None:
     _install_otel_safe_log_record_factory()
+    _configure_noisy_library_loggers()
 
     root_logger = logging.getLogger()
     root_logger.addFilter(OpenTelemetryLogFilter())
@@ -58,3 +68,14 @@ def configure_logging(level: str = "INFO") -> None:
 
     for handler in root_logger.handlers:
         handler.addFilter(OpenTelemetryLogFilter())
+
+
+def _configure_noisy_library_loggers() -> None:
+    """把高噪声第三方库日志降级到 WARNING。
+
+    业务日志继续保留 INFO；Redis、LangChain、httpx 这类库的正常运行诊断
+    默认不进入 SigNoZ Logs，避免生产日志列表被低价值信息刷屏。
+    """
+
+    for logger_name, logger_level in NOISY_LIBRARY_LOGGERS.items():
+        logging.getLogger(logger_name).setLevel(logger_level)

@@ -32,13 +32,17 @@ class Settings(BaseSettings):
     # 没有启动 SigNoZ 时，可以先打开这个，马上看到 trace 输出。
     otel_console_exporter_enabled: bool = False
 
-    # trace 里的服务名。SigNoZ 里会按这个名字展示服务。
+    # 是否把 Python logging 日志通过 OTLP 发送到 SigNoZ Logs。
+    # Trace 跑通后再单独打开它，避免本地开发时无意间产生大量日志写入。
+    otel_logs_enabled: bool = False
+
+    # trace / log 里的服务名。SigNoZ 里会按这个名字展示服务。
     otel_service_name: str = "nextbos-ai"
 
     # OTLP endpoint。自建 SigNoZ 常见值：
     # - gRPC: http://localhost:4317
     # - HTTP: http://localhost:4318
-    # 我们后面第一版会优先按 gRPC exporter 接。
+    # 当前项目使用 gRPC exporter。
     otel_exporter_otlp_endpoint: str = ""
 
     # OTLP headers。SigNoZ Cloud 可能需要 token；本地 SigNoZ 一般不用。

@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from app.api.router import router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
-from app.core.tracing import configure_tracing
+from app.core.tracing import configure_tracing, shutdown_tracing
 from app.memory.short_term.checkpointer import redis_checkpointer
 from app.persistence.postgres.database import create_engine, initialize_agent_schema
 from app.persistence.postgres.session import create_session_factory
@@ -32,6 +32,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             yield
     finally:
         await engine.dispose()
+        shutdown_tracing()
 
 
 settings = get_settings()
