@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .idea/
+.langgraph_api/
 *.py[cod]
 dist/
 build/
