@@ -4,12 +4,15 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from app.core.config import Settings
+from app.core.tracing import get_tracer
 from app.llm.models import (
     EffectiveModelConfig,
     EffectiveModelConfigSnapshot,
     ModelProfile,
     ProviderCredential,
 )
+
+tracer = get_tracer(__name__)
 
 
 @dataclass(frozen=True)
@@ -132,19 +135,25 @@ class ModelConfigResolver:
 
     async def _save_snapshot(self, config: EffectiveModelConfig) -> None:
         # 快照只保存模型元数据和凭证引用。密钥值只留在内存对象里，不复制到快照行。
-        await self.repository.save_effective_snapshot(
-            EffectiveModelConfigSnapshot(
-                source=config.source,
-                model_profile_id=config.model_profile_id,
-                model_profile_version=config.model_profile_version,
-                provider=config.provider,
-                base_url=config.base_url,
-                model_name=config.model_name,
-                params=config.params,
-                credential_id=config.credential.id if config.credential else None,
-                config_digest=config.digest,
+        with tracer.start_as_current_span("llm.config_snapshot.save") as span:
+            span.set_attribute("llm.config.source", config.source)
+            span.set_attribute("llm.config.provider", config.provider)
+            span.set_attribute("llm.config.model_name", config.model_name)
+            span.set_attribute("llm.config.digest", config.digest)
+
+            await self.repository.save_effective_snapshot(
+                EffectiveModelConfigSnapshot(
+                    source=config.source,
+                    model_profile_id=config.model_profile_id,
+                    model_profile_version=config.model_profile_version,
+                    provider=config.provider,
+                    base_url=config.base_url,
+                    model_name=config.model_name,
+                    params=config.params,
+                    credential_id=config.credential.id if config.credential else None,
+                    config_digest=config.digest,
+                )
             )
-        )
 
     def _build_config(
         self,

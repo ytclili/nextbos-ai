@@ -18,7 +18,7 @@ class ChatCompletion:
     """所有供应商适配器返回的统一聊天结果。"""
 
     content: str
-    usage: dict[str, int] = field(default_factory=dict)
+    usage: dict[str, object] = field(default_factory=dict)
     raw: dict[str, object] | None = None
 
 

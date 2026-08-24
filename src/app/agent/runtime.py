@@ -6,9 +6,12 @@ from app.agent.graph import build_graph
 from app.agent.model_runtime import AgentModelRuntime
 from app.agent.options import ChatModelOptions
 from app.core.config import Settings
+from app.core.tracing import get_tracer
 from app.llm.config_resolver import ModelConfigResolver
 from app.llm.service import LLMService
 from app.persistence.postgres.llm_model_repository import PostgresLLMModelRepository
+
+tracer = get_tracer(__name__)
 
 
 async def run_graph(
@@ -27,20 +30,25 @@ async def run_graph(
     DB repository -> ModelConfigResolver -> LLMService -> AgentModelRuntime。
     """
 
-    async with session_factory() as session:
-        model_repository = PostgresLLMModelRepository(session)
-        model_runtime = AgentModelRuntime(
-            config_resolver=ModelConfigResolver(model_repository, settings),
-            llm_service=LLMService(),
-        )
+    with tracer.start_as_current_span("agent.run") as span:
+        span.set_attribute("agent.thread_id", thread_id)
+        span.set_attribute("agent.user_id", user_id)
+        span.set_attribute("agent.input_length", len(message))
 
-        runnable = build_graph(checkpointer=checkpointer, model_runtime=model_runtime)
-        return await runnable.ainvoke(
-            {
-                "messages": [HumanMessage(content=message)],
-                "thread_id": thread_id,
-                "user_id": user_id,
-                "model_options": model_options,
-            },
-            config={"configurable": {"thread_id": thread_id}},
-        )
+        async with session_factory() as session:
+            model_repository = PostgresLLMModelRepository(session)
+            model_runtime = AgentModelRuntime(
+                config_resolver=ModelConfigResolver(model_repository, settings),
+                llm_service=LLMService(),
+            )
+
+            runnable = build_graph(checkpointer=checkpointer, model_runtime=model_runtime)
+            return await runnable.ainvoke(
+                {
+                    "messages": [HumanMessage(content=message)],
+                    "thread_id": thread_id,
+                    "user_id": user_id,
+                    "model_options": model_options,
+                },
+                config={"configurable": {"thread_id": thread_id}},
+            )

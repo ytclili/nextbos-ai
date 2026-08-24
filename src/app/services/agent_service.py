@@ -1,9 +1,13 @@
+import logging
+
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.options import ChatModelOptions
 from app.agent.runtime import run_graph
 from app.core.config import Settings
+
+logger = logging.getLogger(__name__)
 
 
 class AgentService:
@@ -29,6 +33,13 @@ class AgentService:
     ) -> str:
         """执行一次 chat。"""
 
+        logger.info(
+            "agent.chat.started thread_id=%s user_id=%s input_length=%s",
+            thread_id,
+            user_id,
+            len(message),
+        )
+
         result = await run_graph(
             self.checkpointer,
             thread_id=thread_id,
@@ -38,4 +49,13 @@ class AgentService:
             session_factory=self.session_factory,
             settings=self.settings,
         )
-        return result["messages"][-1].content
+
+        content = result["messages"][-1].content
+        logger.info(
+            "agent.chat.completed thread_id=%s user_id=%s output_length=%s",
+            thread_id,
+            user_id,
+            len(content),
+        )
+
+        return content

@@ -1,6 +1,9 @@
+from app.core.tracing import get_tracer, set_span_attributes
 from app.llm.models import EffectiveModelConfig
 from app.llm.ports import ChatCompletion, LLMClientFactory
 from app.llm.providers.factory import create_llm_client
+
+tracer = get_tracer(__name__)
 
 
 class LLMService:
@@ -19,5 +22,17 @@ class LLMService:
         messages: list[object],
         config: EffectiveModelConfig,
     ) -> ChatCompletion:
-        client = self.client_factory(config)
-        return await client.chat(messages=messages, config=config)
+        with tracer.start_as_current_span("llm.provider.chat") as span:
+            span.set_attribute("llm.provider", config.provider)
+            span.set_attribute("llm.model_name", config.model_name)
+            span.set_attribute("llm.config.source", config.source)
+            span.set_attribute("llm.config.digest", config.digest)
+            span.set_attribute("llm.messages.count", len(messages))
+
+            client = self.client_factory(config)
+            completion = await client.chat(messages=messages, config=config)
+
+            span.set_attribute("llm.response.content_length", len(completion.content))
+            set_span_attributes(span, "llm.usage", completion.usage)
+
+            return completion

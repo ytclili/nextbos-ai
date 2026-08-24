@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,6 +23,30 @@ class Settings(BaseSettings):
 
     # 后台动态配置落库时对 api_key 做应用层加密的密钥（预留）
     config_encryption_key: str = ""
+
+    # OpenTelemetry / SigNoZ 调用链路配置。
+    # 第一版默认关闭，避免本地没有 SigNoZ/Collector 时影响服务启动。
+    otel_enabled: bool = False
+
+    # 本地调试用：把 span 直接打印到终端。
+    # 没有启动 SigNoZ 时，可以先打开这个，马上看到 trace 输出。
+    otel_console_exporter_enabled: bool = False
+
+    # trace 里的服务名。SigNoZ 里会按这个名字展示服务。
+    otel_service_name: str = "nextbos-ai"
+
+    # OTLP endpoint。自建 SigNoZ 常见值：
+    # - gRPC: http://localhost:4317
+    # - HTTP: http://localhost:4318
+    # 我们后面第一版会优先按 gRPC exporter 接。
+    otel_exporter_otlp_endpoint: str = ""
+
+    # OTLP headers。SigNoZ Cloud 可能需要 token；本地 SigNoZ 一般不用。
+    # 注意：这个字段可能包含密钥，不要打印到日志。
+    otel_exporter_otlp_headers: str = ""
+
+    # trace 采样率。1.0 = 全采样；生产高流量时可以调低。
+    otel_traces_sample_rate: float = Field(default=1.0, ge=0, le=1)
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

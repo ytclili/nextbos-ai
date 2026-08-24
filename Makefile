@@ -1,4 +1,4 @@
-.PHONY: install dev test lint infra-up infra-down
+.PHONY: install dev test lint infra-up infra-down signoz-up signoz-down
 install:
 	uv sync --group dev
 dev:
@@ -11,3 +11,7 @@ infra-up:
 	docker compose up -d
 infra-down:
 	docker compose down
+signoz-up:
+	foundryctl cast -f deploy/signoz/casting.yaml
+signoz-down:
+	docker compose -f pours/deployment/compose.yaml down

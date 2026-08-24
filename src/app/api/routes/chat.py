@@ -1,6 +1,7 @@
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
+from opentelemetry import trace
 from pydantic import BaseModel, Field
 
 from app.agent.options import ChatModelOptions
@@ -46,6 +47,7 @@ class ChatResponse(BaseModel):
 
     status: Literal["success"] = "success"
     thread_id: str
+    trace_id: str | None = Field(default=None, description="本次请求的 OpenTelemetry trace_id")
     items: list[ChatResponseItem]
 
 
@@ -76,6 +78,7 @@ async def chat(request: ChatRequest, http: Request) -> ChatResponse:
 
     return ChatResponse(
         thread_id=request.thread_id,
+        trace_id=_current_trace_id(),
         items=[
             ChatResponseItem(
                 type="text",
@@ -83,3 +86,15 @@ async def chat(request: ChatRequest, http: Request) -> ChatResponse:
             )
         ],
     )
+
+
+def _current_trace_id() -> str | None:
+    """读取当前请求所在的 trace_id。
+
+    如果没有启用 OTel，或者当前不在有效 span 内，则返回 None。
+    """
+
+    span_context = trace.get_current_span().get_span_context()
+    if not span_context.is_valid:
+        return None
+    return format(span_context.trace_id, "032x")
