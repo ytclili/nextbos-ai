@@ -1,14 +1,11 @@
 from uuid import uuid4
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
 
 from app.core.config import Settings
+from app.llm.chat_models import create_langchain_chat_model
 from app.llm.config_resolver import ModelConfigResolver, ModelSelection, RequestedModelParams
 from app.llm.models import ModelProfile, ProviderCredential
-from app.llm.ports import ChatCompletion
-from app.llm.providers.langchain_chat import LangChainChatClient
-from app.llm.service import LLMService
 from app.persistence.postgres.models import LLMEffectiveConfigSnapshot, LLMModelProfile
 
 
@@ -130,57 +127,14 @@ def test_effective_snapshot_stores_credential_reference_not_secret_value():
 
 
 @pytest.mark.asyncio
-async def test_llm_service_invokes_provider_client_with_effective_config():
-    class RecordingClient:
-        """记录调用参数的假供应商客户端。"""
-
-        def __init__(self):
-            self.calls = []
-
-        async def chat(self, *, messages, config):
-            self.calls.append((messages, config))
-            return ChatCompletion(content="hello", usage={"total_tokens": 3})
-
-    client = RecordingClient()
-
-    def factory(config):
-        assert config.provider == "openai_compatible"
-        return client
-
-    config = await ModelConfigResolver(
-        InMemoryModelRepository(),
-        Settings(
-            llm_provider="openai_compatible",
-            llm_base_url="https://api.deepseek.com/v1",
-            llm_model="deepseek-chat",
-            llm_api_key="env-key",
-        ),
-    ).resolve()
-
-    result = await LLMService(factory).chat(messages=["hi"], config=config)
-
-    assert result.content == "hello"
-    assert result.usage == {"total_tokens": 3}
-    assert client.calls == [(["hi"], config)]
-
-
-@pytest.mark.asyncio
-async def test_langchain_chat_client_delegates_to_langchain_chat_model():
+async def test_chat_model_factory_builds_langchain_model_from_effective_config():
     captured_kwargs = {}
 
     class FakeChatModel:
-        """测试用 LangChain 聊天模型，验证适配器走 ainvoke 接口。"""
+        """测试用 LangChain 聊天模型，验证创建参数。"""
 
         def __init__(self, **kwargs):
             captured_kwargs.update(kwargs)
-            self.messages = None
-
-        async def ainvoke(self, messages):
-            self.messages = messages
-            return AIMessage(
-                content="pong",
-                usage_metadata={"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
-            )
 
     config = await ModelConfigResolver(
         InMemoryModelRepository(),
@@ -193,10 +147,10 @@ async def test_langchain_chat_client_delegates_to_langchain_chat_model():
             llm_timeout_seconds=30,
         ),
     ).resolve(requested_params=RequestedModelParams(max_tokens=128, top_p=0.9))
-    client = LangChainChatClient(chat_model_factory=FakeChatModel)
 
-    result = await client.chat(messages=[HumanMessage(content="ping")], config=config)
+    chat_model = create_langchain_chat_model(config, chat_model_factory=FakeChatModel)
 
+    assert isinstance(chat_model, FakeChatModel)
     assert captured_kwargs == {
         "model": "deepseek-chat",
         "base_url": "https://api.deepseek.com/v1",
@@ -206,5 +160,3 @@ async def test_langchain_chat_client_delegates_to_langchain_chat_model():
         "top_p": 0.9,
         "timeout": 30,
     }
-    assert result.content == "pong"
-    assert result.usage == {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}

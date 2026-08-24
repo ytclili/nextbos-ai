@@ -1,32 +1,23 @@
-from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Any
+from langchain_core.tools import BaseTool
 
-from app.tools.errors import ToolNotFoundError
+from app.tools.builtin.health import health_check
 
 
-@dataclass(frozen=True)
-class ToolSpec:
-    name: str
-    description: str
-    handler: Callable[..., Any]
-    side_effect: bool = False
+def get_builtin_tools() -> list[BaseTool]:
+    """返回 agent 默认可用的内置工具。
+
+    这里统一收口工具列表，避免 LangGraph 节点里到处 import 具体工具。
+    后续新增工具时，只需要在这里加入列表。
+
+    第一版先只放无副作用的健康检查工具。
+    """
+
+    return [
+        health_check,
+    ]
 
 
-class ToolRegistry:
-    def __init__(self) -> None:
-        self._tools: dict[str, ToolSpec] = {}
+def get_builtin_tool_names() -> list[str]:
+    """返回内置工具名称列表，主要用于日志、调试和测试。"""
 
-    def register(self, spec: ToolSpec) -> None:
-        if spec.name in self._tools:
-            raise ValueError(f"tool already registered: {spec.name}")
-        self._tools[spec.name] = spec
-
-    def get(self, name: str) -> ToolSpec:
-        try:
-            return self._tools[name]
-        except KeyError as exc:
-            raise ToolNotFoundError(name) from exc
-
-    def list_names(self) -> list[str]:
-        return sorted(self._tools)
+    return sorted(tool.name for tool in get_builtin_tools())

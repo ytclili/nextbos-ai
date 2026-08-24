@@ -7,9 +7,9 @@ from app.agent.graph import build_graph
 from app.agent.model_runtime import AgentModelRuntime
 from app.agent.options import ChatModelOptions
 from app.core.config import Settings, get_settings
+from app.llm.chat_models import create_langchain_chat_model
 from app.llm.config_resolver import ModelConfigResolver
-from app.llm.ports import ChatCompletion
-from app.llm.service import LLMService
+from app.llm.models import EffectiveModelConfig
 from app.persistence.postgres.database import create_engine, initialize_agent_schema
 from app.persistence.postgres.llm_model_repository import PostgresLLMModelRepository
 from app.persistence.postgres.session import create_session_factory
@@ -36,13 +36,11 @@ class StudioModelRuntime:
         self._schema_initialized = False
         self._schema_lock = asyncio.Lock()
 
-    async def chat(
+    async def resolve_config(
         self,
-        *,
-        messages: list[object],
         options: ChatModelOptions | None,
-    ) -> ChatCompletion:
-        """在 Studio 中调用真实模型链路。"""
+    ) -> EffectiveModelConfig:
+        """在 Studio 中解析真实模型配置。"""
 
         await self._ensure_schema()
 
@@ -50,9 +48,13 @@ class StudioModelRuntime:
             model_repository = PostgresLLMModelRepository(session)
             model_runtime = AgentModelRuntime(
                 config_resolver=ModelConfigResolver(model_repository, self.settings),
-                llm_service=LLMService(),
             )
-            return await model_runtime.chat(messages=messages, options=options)
+            return await model_runtime.resolve_config(options)
+
+    def create_chat_model(self, config: EffectiveModelConfig):
+        """根据解析后的配置创建 LangChain ChatModel。"""
+
+        return create_langchain_chat_model(config)
 
     async def _ensure_schema(self) -> None:
         """首次 Studio 调用前初始化数据库表结构。"""

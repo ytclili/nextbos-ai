@@ -2,7 +2,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.agent.nodes.respond import create_respond_node
-from app.llm.ports import ChatCompletion
+from app.llm.models import EffectiveModelConfig, ProviderCredential
 
 
 class FakeAgentModelRuntime:
@@ -13,24 +13,49 @@ class FakeAgentModelRuntime:
     """
 
     def __init__(self) -> None:
-        self.calls: list[dict[str, object]] = []
+        self.resolve_calls: list[object | None] = []
+        self.created_configs: list[EffectiveModelConfig] = []
 
-    async def chat(
-        self,
-        *,
-        messages: list[object],
-        options: object | None,
-    ) -> ChatCompletion:
-        """模拟 AgentModelRuntime.chat()。"""
+    async def resolve_config(self, options: object | None) -> EffectiveModelConfig:
+        """模拟模型配置解析。"""
 
-        self.calls.append(
-            {
-                "messages": messages,
-                "options": options,
-            }
+        self.resolve_calls.append(options)
+        return EffectiveModelConfig(
+            source="env_fallback",
+            provider="openai_compatible",
+            base_url="https://api.example.com/v1",
+            model_name="test-model",
+            params={},
+            credential=ProviderCredential(
+                id=None,
+                provider="openai_compatible",
+                name="env",
+                api_key="test-key",
+            ),
+            digest="digest",
         )
 
-        return ChatCompletion(content="假模型回复")
+    def create_chat_model(self, config: EffectiveModelConfig):
+        """模拟创建 LangChain ChatModel。"""
+
+        self.created_configs.append(config)
+        return FakeChatModel()
+
+
+class FakeChatModel:
+    """测试用 LangChain ChatModel。"""
+
+    def __init__(self):
+        self.bound_tools = []
+        self.messages = None
+
+    def bind_tools(self, tools):
+        self.bound_tools = tools
+        return self
+
+    async def ainvoke(self, messages):
+        self.messages = messages
+        return AIMessage(content="假模型回复")
 
 
 @pytest.mark.asyncio
@@ -47,12 +72,8 @@ async def test_respond_node_calls_model_runtime_and_returns_ai_message() -> None
         }
     )
 
-    assert len(model_runtime.calls) == 1
-
-    saved_messages = model_runtime.calls[0]["messages"]
-    assert isinstance(saved_messages, list)
-    assert isinstance(saved_messages[0], HumanMessage)
-    assert saved_messages[0].content == "今天吃什么？"
+    assert model_runtime.resolve_calls == [None]
+    assert len(model_runtime.created_configs) == 1
 
     assert "messages" in result
     assert len(result["messages"]) == 1

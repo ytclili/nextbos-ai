@@ -8,7 +8,6 @@ from app.agent.options import ChatModelOptions
 from app.core.config import Settings
 from app.core.tracing import get_tracer
 from app.llm.config_resolver import ModelConfigResolver
-from app.llm.service import LLMService
 from app.persistence.postgres.llm_model_repository import PostgresLLMModelRepository
 
 tracer = get_tracer(__name__)
@@ -27,7 +26,7 @@ async def run_graph(
     """执行一次 LangGraph chat。
 
     这里负责组装 agent 本次运行需要的模型运行时依赖：
-    DB repository -> ModelConfigResolver -> LLMService -> AgentModelRuntime。
+    DB repository -> ModelConfigResolver -> AgentModelRuntime。
     """
 
     with tracer.start_as_current_span("agent.run") as span:
@@ -39,7 +38,6 @@ async def run_graph(
             model_repository = PostgresLLMModelRepository(session)
             model_runtime = AgentModelRuntime(
                 config_resolver=ModelConfigResolver(model_repository, settings),
-                llm_service=LLMService(),
             )
 
             runnable = build_graph(checkpointer=checkpointer, model_runtime=model_runtime)

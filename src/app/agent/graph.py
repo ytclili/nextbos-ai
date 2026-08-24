@@ -1,8 +1,10 @@
 from langchain_core.messages import AIMessage
 from langgraph.graph import END, START, StateGraph
+from langgraph.prebuilt import tools_condition
 
 from app.agent.model_runtime import AgentModelRuntime
 from app.agent.nodes.respond import create_respond_node
+from app.agent.nodes.tools import create_tools_node
 from app.agent.state import AgentState
 
 
@@ -18,6 +20,18 @@ def fallback_respond(state: AgentState) -> dict[str, list[AIMessage]]:
 
 
 def build_graph(*, checkpointer=None, model_runtime: AgentModelRuntime | None = None):
+    """构建 agent 执行图。
+
+    图结构：
+
+    respond -> tools -> respond -> END
+
+    respond 节点负责调用模型。
+    如果模型返回 tool_calls，则进入 tools 节点执行工具；
+    tools 节点执行完会把 ToolMessage 写回 messages，然后回到 respond。
+    如果模型没有返回 tool_calls，则直接结束。
+    """
+
     builder = StateGraph(AgentState)
 
     respond_node = (
@@ -27,8 +41,19 @@ def build_graph(*, checkpointer=None, model_runtime: AgentModelRuntime | None = 
     )
 
     builder.add_node("respond", respond_node)
+    builder.add_node("tools", create_tools_node())
+
     builder.add_edge(START, "respond")
-    builder.add_edge("respond", END)
+    builder.add_conditional_edges(
+        "respond",
+        tools_condition,
+        {
+            "tools": "tools",
+            END: END,
+        },
+    )
+    builder.add_edge("tools", "respond")
+
     return builder.compile(checkpointer=checkpointer)
 
 

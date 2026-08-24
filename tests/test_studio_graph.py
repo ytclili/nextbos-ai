@@ -3,7 +3,7 @@ import json
 import pytest
 
 from app.core.config import Settings
-from app.llm.ports import ChatCompletion
+from app.llm.models import EffectiveModelConfig, ProviderCredential
 
 
 def test_langgraph_config_points_to_studio_graph() -> None:
@@ -58,13 +58,25 @@ async def test_studio_model_runtime_initializes_schema_once_and_calls_model_runt
             return FakeSessionContext()
 
     class FakeAgentModelRuntime:
-        def __init__(self, *, config_resolver, llm_service):
+        def __init__(self, *, config_resolver):
             self.config_resolver = config_resolver
-            self.llm_service = llm_service
 
-        async def chat(self, *, messages, options):
-            runtime_calls.append({"messages": messages, "options": options})
-            return ChatCompletion(content="Studio 模型回复")
+        async def resolve_config(self, options):
+            runtime_calls.append({"options": options})
+            return EffectiveModelConfig(
+                source="env_fallback",
+                provider="openai_compatible",
+                base_url="https://api.example.com/v1",
+                model_name="test-model",
+                params={},
+                credential=ProviderCredential(
+                    id=None,
+                    provider="openai_compatible",
+                    name="env",
+                    api_key="test-key",
+                ),
+                digest="digest",
+            )
 
     async def initialize_schema() -> None:
         nonlocal initialized_count
@@ -78,14 +90,14 @@ async def test_studio_model_runtime_initializes_schema_once_and_calls_model_runt
         initialize_schema=initialize_schema,
     )
 
-    first = await runtime.chat(messages=["hi"], options=None)
-    second = await runtime.chat(messages=["再来一次"], options=None)
+    first = await runtime.resolve_config(options=None)
+    second = await runtime.resolve_config(options=None)
 
-    assert first.content == "Studio 模型回复"
-    assert second.content == "Studio 模型回复"
+    assert first.model_name == "test-model"
+    assert second.model_name == "test-model"
     assert initialized_count == 1
     assert sessions == ["session", "session"]
     assert runtime_calls == [
-        {"messages": ["hi"], "options": None},
-        {"messages": ["再来一次"], "options": None},
+        {"options": None},
+        {"options": None},
     ]

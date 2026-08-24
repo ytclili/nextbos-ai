@@ -54,10 +54,6 @@ class FakeConfigResolver:
         )
 
 
-class FakeLLMService:
-    """这个测试只覆盖配置解析，不会真正调用 LLM。"""
-
-
 @pytest.mark.asyncio
 async def test_resolve_config_records_empty_model_alias_when_option_alias_is_none(monkeypatch):
     from app.agent import model_runtime
@@ -65,7 +61,7 @@ async def test_resolve_config_records_empty_model_alias_when_option_alias_is_non
     tracer = RecordingTracer()
     monkeypatch.setattr(model_runtime, "tracer", tracer)
     resolver = FakeConfigResolver()
-    runtime = AgentModelRuntime(config_resolver=resolver, llm_service=FakeLLMService())
+    runtime = AgentModelRuntime(config_resolver=resolver)
 
     await runtime.resolve_config(ChatModelOptions(model_alias=None))
 
