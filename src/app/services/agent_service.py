@@ -1,10 +1,13 @@
 import logging
+from collections.abc import AsyncIterator
+from typing import Any
 
+from langchain_core.messages import BaseMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.options import ChatModelOptions
-from app.agent.runtime import run_graph
+from app.agent.runtime import GraphStreamEvent, run_graph, stream_graph
 from app.conversation.repository import ConversationRepository
 from app.conversation.summary import extract_running_summary
 from app.core.config import Settings
@@ -43,6 +46,7 @@ class AgentService:
         这样后续可以从聊天记录反查 SigNoZ / OpenTelemetry 调用链路。
         """
 
+        model_options = model_options or ChatModelOptions()
         logger.info(
             "agent.chat.started thread_id=%s user_id=%s input_length=%s",
             thread_id,
@@ -50,12 +54,10 @@ class AgentService:
             len(message),
         )
 
-        # 先保存用户消息。
-        # 这是一个短事务，提交后马上释放数据库连接，不会跨 LLM 调用持有事务。
-        await self.conversation_repository.append_user_message(
+        await self._append_user_message(
             thread_id=thread_id,
             user_id=user_id,
-            content=message,
+            message=message,
             trace_id=trace_id,
         )
 
@@ -64,35 +66,20 @@ class AgentService:
             thread_id=thread_id,
             user_id=user_id,
             message=message,
-            model_options=model_options or ChatModelOptions(),
+            model_options=model_options,
             session_factory=self.session_factory,
             settings=self.settings,
             memory_store=self.memory_store,
         )
 
-        content = result["messages"][-1].content
-        llm_snapshot_id = result.get("llm_snapshot_id")
-
-        # 再保存 assistant 最终回复。
-        # trace_id 和 user 消息保持一致，llm_snapshot_id 指向本次回答实际使用的模型快照。
-        await self.conversation_repository.append_assistant_message(
+        content = _extract_final_content(result)
+        await self._persist_assistant_result(
             thread_id=thread_id,
             user_id=user_id,
             content=content,
             trace_id=trace_id,
-            llm_snapshot_id=llm_snapshot_id,
+            result=result,
         )
-
-        # 如果 LangMem summary 节点产出了 rolling summary，就把它持久化。
-        # 这仍然是短事务，不会跨 LLM 调用持有数据库事务。
-        if summary := extract_running_summary(result):
-            await self.conversation_repository.save_summary(
-                thread_id=thread_id,
-                user_id=user_id,
-                summary=summary.summary,
-                covered_through_message_id=summary.covered_through_message_id,
-                message_count=summary.message_count,
-            )
 
         logger.info(
             "agent.chat.completed thread_id=%s user_id=%s output_length=%s",
@@ -102,3 +89,192 @@ class AgentService:
         )
 
         return content
+
+    async def stream_chat(
+        self,
+        *,
+        thread_id: str,
+        user_id: str,
+        message: str,
+        model_options: ChatModelOptions | None = None,
+        trace_id: str | None = None,
+    ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+        """流式执行一次 chat。
+
+        输出给 API 层的是业务事件元组，由 API 层再编码成 SSE。
+        数据库仍然只保存完整 user / assistant 消息，不按 token 落库。
+        """
+
+        model_options = model_options or ChatModelOptions()
+        logger.info(
+            "agent.chat.stream.started thread_id=%s user_id=%s input_length=%s",
+            thread_id,
+            user_id,
+            len(message),
+        )
+
+        await self._append_user_message(
+            thread_id=thread_id,
+            user_id=user_id,
+            message=message,
+            trace_id=trace_id,
+        )
+        yield (
+            "start",
+            {
+                "code": 200,
+                "status": "success",
+                "thread_id": thread_id,
+                "trace_id": trace_id,
+            },
+        )
+
+        accumulated_tokens: list[str] = []
+        final_state: dict[str, Any] = {}
+
+        async for event in stream_graph(
+            self.checkpointer,
+            thread_id=thread_id,
+            user_id=user_id,
+            message=message,
+            model_options=model_options,
+            session_factory=self.session_factory,
+            settings=self.settings,
+            memory_store=self.memory_store,
+        ):
+            if event.mode == "messages":
+                token = _extract_token(event)
+                if token:
+                    accumulated_tokens.append(token)
+                    yield ("token", {"type": "text", "content": token})
+            elif event.mode == "final_state":
+                final_state = dict(event.data or {})
+
+        content = _extract_final_content(final_state) or "".join(accumulated_tokens)
+        await self._persist_assistant_result(
+            thread_id=thread_id,
+            user_id=user_id,
+            content=content,
+            trace_id=trace_id,
+            result=final_state,
+        )
+
+        logger.info(
+            "agent.chat.stream.completed thread_id=%s user_id=%s output_length=%s",
+            thread_id,
+            user_id,
+            len(content),
+        )
+        yield ("done", {"content": content})
+
+    async def _append_user_message(
+        self,
+        *,
+        thread_id: str,
+        user_id: str,
+        message: str,
+        trace_id: str | None,
+    ) -> None:
+        """保存用户消息。
+
+        这是一个短事务，提交后马上释放数据库连接，不会跨 LLM 调用持有事务。
+        """
+
+        await self.conversation_repository.append_user_message(
+            thread_id=thread_id,
+            user_id=user_id,
+            content=message,
+            trace_id=trace_id,
+        )
+
+    async def _persist_assistant_result(
+        self,
+        *,
+        thread_id: str,
+        user_id: str,
+        content: str,
+        trace_id: str | None,
+        result: dict[str, Any],
+    ) -> None:
+        """保存 assistant 完整回复和可选 summary。"""
+
+        await self.conversation_repository.append_assistant_message(
+            thread_id=thread_id,
+            user_id=user_id,
+            content=content,
+            trace_id=trace_id,
+            llm_snapshot_id=result.get("llm_snapshot_id"),
+        )
+
+        if summary := extract_running_summary(result):
+            await self.conversation_repository.save_summary(
+                thread_id=thread_id,
+                user_id=user_id,
+                summary=summary.summary,
+                covered_through_message_id=summary.covered_through_message_id,
+                message_count=summary.message_count,
+            )
+
+
+def _extract_token(event: GraphStreamEvent) -> str:
+    """从 LangGraph messages 事件中提取文本 token。"""
+
+    if not _is_frontend_token_event(event):
+        return ""
+
+    chunk = event.data[0] if isinstance(event.data, tuple) and event.data else event.data
+    content = getattr(chunk, "content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(_content_part_to_text(part) for part in content)
+    return str(content) if content else ""
+
+
+def _is_frontend_token_event(event: GraphStreamEvent) -> bool:
+    """判断这个 messages 事件是否应该推给前端。
+
+    LangGraph 的 messages stream 会包含图里所有 LLM 节点的 token。
+    summarize 是内部压缩上下文用的节点，不能把摘要生成过程展示给用户。
+    """
+
+    if not isinstance(event.data, tuple) or len(event.data) < 2:
+        return True
+
+    metadata = event.data[1]
+    if not isinstance(metadata, dict):
+        return True
+
+    node_name = metadata.get("langgraph_node")
+    return node_name in {None, "respond", "final_respond"}
+
+
+def _content_part_to_text(part: Any) -> str:
+    """兼容部分供应商返回的结构化 content part。"""
+
+    if isinstance(part, str):
+        return part
+    if isinstance(part, dict):
+        text = part.get("text")
+        return text if isinstance(text, str) else ""
+    return ""
+
+
+def _extract_final_content(state: dict[str, Any]) -> str:
+    """从最终 LangGraph state 中提取 assistant 完整文本。"""
+
+    messages = state.get("messages") or []
+    if not messages:
+        return ""
+
+    last_message = messages[-1]
+    if isinstance(last_message, BaseMessage):
+        content = last_message.content
+    else:
+        content = getattr(last_message, "content", "")
+
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(_content_part_to_text(part) for part in content)
+    return str(content) if content else ""

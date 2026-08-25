@@ -247,3 +247,106 @@ async def test_run_graph_restores_messages_from_postgres_when_checkpoint_is_miss
             "langgraph_user_id": "user-1",
         }
     }
+
+
+@pytest.mark.asyncio
+async def test_stream_graph_uses_langgraph_astream_and_yields_final_state(monkeypatch) -> None:
+    """stream_graph 应该复用图准备逻辑，并从 LangGraph astream 产出事件。"""
+
+    captured = {}
+    checkpointer = FakeCheckpointer(checkpoint=object())
+    summarization_model = object()
+
+    class FakeAgentModelRuntime:
+        """测试用模型运行时，不访问真实数据库或大模型。"""
+
+        def __init__(self, *, config_resolver):
+            self.config_resolver = config_resolver
+
+        async def resolve_config(self, options):
+            captured["model_options"] = options
+            return EffectiveModelConfig(
+                source="env_fallback",
+                provider="openai_compatible",
+                base_url="https://api.example.com/v1",
+                model_name="test-model",
+                params={},
+                credential=ProviderCredential(
+                    id=None,
+                    provider="openai_compatible",
+                    name="env",
+                    api_key="test-key",
+                ),
+                digest="digest",
+            )
+
+        def create_chat_model(self, config):
+            captured["summary_model_config"] = config
+            return summarization_model
+
+    class FakeStateSnapshot:
+        """测试用 LangGraph state snapshot。"""
+
+        values = {"messages": [AIMessage(content="粤菜")]}
+
+    class FakeRunnable:
+        async def astream(self, state, config, stream_mode):
+            captured["state"] = state
+            captured["config"] = config
+            captured["stream_mode"] = stream_mode
+            yield ("messages", ("chunk", {"langgraph_node": "respond"}))
+
+        async def aget_state(self, config):
+            captured["aget_state_config"] = config
+            return FakeStateSnapshot()
+
+    def fake_build_graph(
+        *,
+        checkpointer,
+        model_runtime,
+        store,
+        summarization_model,
+        summary_options,
+    ):
+        captured["checkpointer"] = checkpointer
+        captured["store"] = store
+        captured["summarization_model"] = summarization_model
+        captured["summary_options"] = summary_options
+        return FakeRunnable()
+
+    monkeypatch.setattr(runtime_module, "AgentModelRuntime", FakeAgentModelRuntime)
+    monkeypatch.setattr(runtime_module, "build_graph", fake_build_graph)
+
+    events = [
+        event
+        async for event in runtime_module.stream_graph(
+            checkpointer,
+            thread_id="thread-1",
+            user_id="user-1",
+            message="今天吃什么？",
+            model_options=ChatModelOptions(),
+            session_factory=FakeSessionFactory(),
+            settings=Settings(),
+            memory_store="memory-store",
+        )
+    ]
+
+    assert events == [
+        runtime_module.GraphStreamEvent(
+            mode="messages",
+            data=("chunk", {"langgraph_node": "respond"}),
+        ),
+        runtime_module.GraphStreamEvent(
+            mode="final_state",
+            data={"messages": [AIMessage(content="粤菜")]},
+        ),
+    ]
+    assert captured["stream_mode"] == ["messages", "updates"]
+    assert captured["store"] == "memory-store"
+    assert isinstance(captured["state"]["messages"][0], HumanMessage)
+    assert captured["aget_state_config"] == {
+        "configurable": {
+            "thread_id": "thread-1",
+            "langgraph_user_id": "user-1",
+        }
+    }

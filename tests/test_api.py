@@ -123,6 +123,85 @@ def test_chat_endpoint_passes_trace_id_to_agent_service(monkeypatch):
     ]
 
 
+def test_chat_stream_endpoint_returns_sse_events(monkeypatch):
+    """stream chat 接口应该把 AgentService 的事件编码成 SSE。"""
+
+    calls = []
+
+    class FakeAgentService:
+        def __init__(self, checkpointer, session_factory, settings, memory_store=None):
+            calls.append(
+                (
+                    "init",
+                    {
+                        "checkpointer": checkpointer,
+                        "session_factory": session_factory,
+                        "settings": settings,
+                        "memory_store": memory_store,
+                    },
+                )
+            )
+
+        async def stream_chat(self, **kwargs):
+            calls.append(("stream_chat", kwargs))
+            yield ("start", {"code": 200, "status": "success", "thread_id": kwargs["thread_id"]})
+            yield ("token", {"type": "text", "content": "粤"})
+            yield ("token", {"type": "text", "content": "菜"})
+            yield ("done", {"content": "粤菜"})
+
+    settings = Settings()
+    monkeypatch.setattr(chat_route_module, "AgentService", FakeAgentService)
+    monkeypatch.setattr(chat_route_module, "_current_trace_id", lambda: "trace-123")
+
+    app.state.checkpointer = "checkpointer"
+    app.state.session_factory = "session-factory"
+    app.state.settings = settings
+    app.state.memory_store = "memory-store"
+
+    client = TestClient(app)
+    with client.stream(
+        "POST",
+        "/api/v1/chat/stream",
+        json={
+            "thread_id": "thread-1",
+            "user_id": "user-1",
+            "message": "今天吃什么？",
+        },
+    ) as response:
+        body = response.read().decode()
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert 'event: start\ndata: {"code":200,"status":"success","thread_id":"thread-1"}' in body
+    assert 'event: token\ndata: {"type":"text","content":"粤"}' in body
+    assert 'event: token\ndata: {"type":"text","content":"菜"}' in body
+    assert 'event: done\ndata: {"content":"粤菜"}' in body
+    assert calls == [
+        (
+            "init",
+            {
+                "checkpointer": "checkpointer",
+                "session_factory": "session-factory",
+                "settings": settings,
+                "memory_store": "memory-store",
+            },
+        ),
+        (
+            "stream_chat",
+            {
+                "thread_id": "thread-1",
+                "user_id": "user-1",
+                "message": "今天吃什么？",
+                "model_options": chat_route_module.ChatModelOptions(
+                    model_alias=None,
+                    model_params=None,
+                ),
+                "trace_id": "trace-123",
+            },
+        ),
+    ]
+
+
 def test_chat_endpoint_maps_timeout_to_structured_504(monkeypatch):
     """chat 接口应该把 timeout 映射成前端可识别的结构化错误。"""
 

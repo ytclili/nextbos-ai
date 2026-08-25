@@ -1,11 +1,14 @@
+from collections.abc import AsyncIterator
 from typing import Any, Literal
 
 from fastapi import APIRouter, Request
 from opentelemetry import trace
 from pydantic import BaseModel, Field
+from starlette.responses import StreamingResponse
 
 from app.agent.options import ChatModelOptions
 from app.api.errors import map_exception_to_http_error
+from app.api.streaming import encode_sse_event
 from app.services.agent_service import AgentService
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -67,12 +70,7 @@ async def chat(request: ChatRequest, http: Request) -> ChatResponse:
             thread_id=request.thread_id,
             user_id=request.user_id,
             message=request.message,
-            model_options=ChatModelOptions(
-                model_alias=request.model_alias,
-                model_params=request.model_params.model_dump(exclude_none=True)
-                if request.model_params
-                else None,
-            ),
+            model_options=_to_model_options(request),
             trace_id=trace_id,
         )
     except Exception as exc:
@@ -87,6 +85,73 @@ async def chat(request: ChatRequest, http: Request) -> ChatResponse:
                 content=content,
             )
         ],
+    )
+
+
+@router.post("/stream")
+async def chat_stream(request: ChatRequest, http: Request) -> StreamingResponse:
+    """流式 chat 接口。
+
+    返回 text/event-stream：
+    - start：请求开始；
+    - token：模型增量文本；
+    - done：模型完整回复已经生成并落库；
+    - error：流式过程中出现异常。
+    """
+
+    trace_id = _current_trace_id()
+    service = AgentService(
+        http.app.state.checkpointer,
+        http.app.state.session_factory,
+        http.app.state.settings,
+        memory_store=http.app.state.memory_store,
+    )
+
+    async def event_stream() -> AsyncIterator[str]:
+        try:
+            async for event, data in service.stream_chat(
+                thread_id=request.thread_id,
+                user_id=request.user_id,
+                message=request.message,
+                model_options=_to_model_options(request),
+                trace_id=trace_id,
+            ):
+                yield encode_sse_event(event, data)
+        except Exception as exc:
+            http_error = map_exception_to_http_error(exc)
+            detail = http_error.detail
+            if isinstance(detail, dict):
+                code = str(detail.get("code", "stream_error"))
+                message = str(detail.get("message", "流式输出失败，请稍后重试。"))
+            else:
+                code = "stream_error"
+                message = str(detail)
+            yield encode_sse_event(
+                "error",
+                {
+                    "code": code,
+                    "message": message,
+                },
+            )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _to_model_options(request: ChatRequest) -> ChatModelOptions:
+    """把接口请求里的模型参数转换成 agent service 使用的对象。"""
+
+    return ChatModelOptions(
+        model_alias=request.model_alias,
+        model_params=request.model_params.model_dump(exclude_none=True)
+        if request.model_params
+        else None,
     )
 
 

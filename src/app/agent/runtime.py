@@ -1,3 +1,8 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from typing import Any
+
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -14,6 +19,27 @@ from app.llm.config_resolver import ModelConfigResolver
 from app.persistence.postgres.llm_model_repository import PostgresLLMModelRepository
 
 tracer = get_tracer(__name__)
+
+
+@dataclass(frozen=True)
+class PreparedGraphRun:
+    """一次 LangGraph 运行前准备好的公共上下文。"""
+
+    runnable: Any
+    input_state: dict[str, Any]
+    graph_config: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class GraphStreamEvent:
+    """LangGraph 流式事件。
+
+    mode 是 LangGraph stream_mode，例如 messages / updates / final_state。
+    data 是该模式下的原始数据，service 层再决定如何转成前端事件。
+    """
+
+    mode: str
+    data: Any
 
 
 async def run_graph(
@@ -44,55 +70,156 @@ async def run_graph(
         span.set_attribute("agent.user_id", user_id)
         span.set_attribute("agent.input_length", len(message))
 
-        graph_config = {
-            "configurable": {
-                "thread_id": thread_id,
-                "langgraph_user_id": user_id,
-            }
+        async with _prepare_graph_run(
+            checkpointer,
+            thread_id=thread_id,
+            user_id=user_id,
+            message=message,
+            model_options=model_options,
+            session_factory=session_factory,
+            settings=settings,
+            memory_store=memory_store,
+        ) as prepared:
+            span.set_attribute(
+                "agent.restore.messages.count",
+                len(prepared.input_state["messages"]),
+            )
+            return await prepared.runnable.ainvoke(
+                prepared.input_state,
+                config=prepared.graph_config,
+            )
+
+
+async def stream_graph(
+    checkpointer: BaseCheckpointSaver,
+    *,
+    thread_id: str,
+    user_id: str,
+    message: str,
+    model_options: ChatModelOptions,
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    memory_store=None,
+) -> AsyncIterator[GraphStreamEvent]:
+    """流式执行一次 LangGraph chat。
+
+    这里复用和 run_graph 相同的图准备逻辑，只是最后改为调用 LangGraph
+    官方 astream()。stream_mode 同时打开：
+    - messages：拿 LLM token 增量；
+    - updates：保留后续扩展节点/tool 状态事件的入口。
+
+    图执行结束后再读取最终 state，service 层用它保存 assistant 完整回复和 summary。
+    """
+
+    with tracer.start_as_current_span("agent.run.stream") as span:
+        span.set_attribute("agent.thread_id", thread_id)
+        span.set_attribute("agent.user_id", user_id)
+        span.set_attribute("agent.input_length", len(message))
+
+        async with _prepare_graph_run(
+            checkpointer,
+            thread_id=thread_id,
+            user_id=user_id,
+            message=message,
+            model_options=model_options,
+            session_factory=session_factory,
+            settings=settings,
+            memory_store=memory_store,
+        ) as prepared:
+            span.set_attribute(
+                "agent.restore.messages.count",
+                len(prepared.input_state["messages"]),
+            )
+
+            async for item in prepared.runnable.astream(
+                prepared.input_state,
+                config=prepared.graph_config,
+                stream_mode=["messages", "updates"],
+            ):
+                yield _to_graph_stream_event(item)
+
+            snapshot = await prepared.runnable.aget_state(prepared.graph_config)
+            yield GraphStreamEvent(
+                mode="final_state",
+                data=dict(getattr(snapshot, "values", {}) or {}),
+            )
+
+
+@asynccontextmanager
+async def _prepare_graph_run(
+    checkpointer: BaseCheckpointSaver,
+    *,
+    thread_id: str,
+    user_id: str,
+    message: str,
+    model_options: ChatModelOptions,
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    memory_store=None,
+) -> AsyncIterator[PreparedGraphRun]:
+    """准备 LangGraph 运行所需的公共上下文。
+
+    非流式 run_graph 和流式 stream_graph 都走这里，避免两套逻辑漂移。
+
+    注意：这里是 async contextmanager，因为 AgentModelRuntime 里的模型仓储会持有
+    本次数据库 session。必须等图执行结束后再退出 session context。
+    """
+
+    graph_config = {
+        "configurable": {
+            "thread_id": thread_id,
+            "langgraph_user_id": user_id,
         }
-        checkpoint_exists = await _checkpoint_exists(checkpointer, graph_config)
-        span.set_attribute("agent.checkpoint.exists", checkpoint_exists)
+    }
+    checkpoint_exists = await _checkpoint_exists(checkpointer, graph_config)
 
-        async with session_factory() as session:
-            model_repository = PostgresLLMModelRepository(session)
-            model_runtime = AgentModelRuntime(
-                config_resolver=ModelConfigResolver(model_repository, settings),
+    async with session_factory() as session:
+        model_repository = PostgresLLMModelRepository(session)
+        model_runtime = AgentModelRuntime(
+            config_resolver=ModelConfigResolver(model_repository, settings),
+        )
+        model_config = await model_runtime.resolve_config(model_options)
+        summarization_model = model_runtime.create_chat_model(model_config)
+
+        if checkpoint_exists:
+            messages = [HumanMessage(content=message)]
+        else:
+            context_loader = ConversationContextLoader(
+                ConversationRepository(session_factory),
             )
-            model_config = await model_runtime.resolve_config(model_options)
-            summarization_model = model_runtime.create_chat_model(model_config)
-
-            if checkpoint_exists:
+            messages = await context_loader.load_messages(thread_id=thread_id)
+            if not messages:
                 messages = [HumanMessage(content=message)]
-            else:
-                context_loader = ConversationContextLoader(
-                    ConversationRepository(session_factory),
-                )
-                messages = await context_loader.load_messages(thread_id=thread_id)
-                if not messages:
-                    messages = [HumanMessage(content=message)]
 
-            span.set_attribute("agent.restore.messages.count", len(messages))
+        runnable = build_graph(
+            checkpointer=checkpointer,
+            model_runtime=model_runtime,
+            store=memory_store,
+            summarization_model=summarization_model,
+            summary_options=SummaryOptions(
+                max_tokens=settings.summary_max_tokens,
+                trigger_tokens=settings.summary_trigger_tokens,
+                max_output_tokens=settings.summary_max_output_tokens,
+            ),
+        )
+        yield PreparedGraphRun(
+            runnable=runnable,
+            input_state={
+                "messages": messages,
+                "thread_id": thread_id,
+                "user_id": user_id,
+                "model_options": model_options,
+            },
+            graph_config=graph_config,
+        )
 
-            runnable = build_graph(
-                checkpointer=checkpointer,
-                model_runtime=model_runtime,
-                store=memory_store,
-                summarization_model=summarization_model,
-                summary_options=SummaryOptions(
-                    max_tokens=settings.summary_max_tokens,
-                    trigger_tokens=settings.summary_trigger_tokens,
-                    max_output_tokens=settings.summary_max_output_tokens,
-                ),
-            )
-            return await runnable.ainvoke(
-                {
-                    "messages": messages,
-                    "thread_id": thread_id,
-                    "user_id": user_id,
-                    "model_options": model_options,
-                },
-                config=graph_config,
-            )
+
+def _to_graph_stream_event(item: Any) -> GraphStreamEvent:
+    """把 LangGraph astream 原始返回规整成 GraphStreamEvent。"""
+
+    if isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str):
+        return GraphStreamEvent(mode=item[0], data=item[1])
+    return GraphStreamEvent(mode="updates", data=item)
 
 
 async def _checkpoint_exists(checkpointer: BaseCheckpointSaver, config: dict) -> bool:

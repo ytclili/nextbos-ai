@@ -1,6 +1,6 @@
 from uuid import uuid4
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 from langmem.short_term import RunningSummary
 
 import app.services.agent_service as agent_service_module
@@ -156,3 +156,143 @@ async def test_agent_service_skips_summary_when_graph_does_not_return_running_su
 
     repository = created_repositories[0]
     assert [event[0] for event in repository.events] == ["user", "assistant"]
+
+
+async def test_agent_service_streams_tokens_and_persists_final_assistant_message(
+    monkeypatch,
+) -> None:
+    """stream_chat 应该边返回 token，结束后保存完整 assistant 回复。"""
+
+    snapshot_id = uuid4()
+
+    async def fake_stream_graph(*args, **kwargs):
+        yield agent_service_module.GraphStreamEvent(
+            mode="messages",
+            data=(AIMessageChunk(content="粤"), {}),
+        )
+        yield agent_service_module.GraphStreamEvent(
+            mode="messages",
+            data=(AIMessageChunk(content="菜"), {}),
+        )
+        yield agent_service_module.GraphStreamEvent(
+            mode="final_state",
+            data={
+                "messages": [AIMessage(content="粤菜")],
+                "llm_snapshot_id": snapshot_id,
+                "context": {
+                    "running_summary": RunningSummary(
+                        summary="用户想知道今天吃什么。",
+                        summarized_message_ids={"message-1", "message-2"},
+                        last_summarized_message_id="message-2",
+                    )
+                },
+            },
+        )
+
+    created_repositories.clear()
+    monkeypatch.setattr(agent_service_module, "ConversationRepository", FakeConversationRepository)
+    monkeypatch.setattr(agent_service_module, "stream_graph", fake_stream_graph)
+
+    service = AgentService(
+        checkpointer="checkpointer",
+        session_factory="session-factory",
+        settings=Settings(),
+        memory_store="memory-store",
+    )
+
+    events = [
+        event
+        async for event in service.stream_chat(
+            thread_id="thread-1",
+            user_id="user-1",
+            message="今天吃什么？",
+            model_options=ChatModelOptions(),
+            trace_id="trace-1",
+        )
+    ]
+
+    assert events == [
+        (
+            "start",
+            {
+                "code": 200,
+                "status": "success",
+                "thread_id": "thread-1",
+                "trace_id": "trace-1",
+            },
+        ),
+        ("token", {"type": "text", "content": "粤"}),
+        ("token", {"type": "text", "content": "菜"}),
+        ("done", {"content": "粤菜"}),
+    ]
+    assert created_repositories[0].events == [
+        (
+            "user",
+            {
+                "thread_id": "thread-1",
+                "user_id": "user-1",
+                "content": "今天吃什么？",
+                "trace_id": "trace-1",
+            },
+        ),
+        (
+            "assistant",
+            {
+                "thread_id": "thread-1",
+                "user_id": "user-1",
+                "content": "粤菜",
+                "trace_id": "trace-1",
+                "llm_snapshot_id": snapshot_id,
+            },
+        ),
+        (
+            "summary",
+            {
+                "thread_id": "thread-1",
+                "user_id": "user-1",
+                "summary": "用户想知道今天吃什么。",
+                "covered_through_message_id": None,
+                "message_count": 2,
+            },
+        ),
+    ]
+
+
+async def test_agent_service_stream_skips_summary_model_tokens(monkeypatch) -> None:
+    """stream_chat 不应该把内部 summary 节点的 token 推给前端。"""
+
+    async def fake_stream_graph(*args, **kwargs):
+        yield agent_service_module.GraphStreamEvent(
+            mode="messages",
+            data=(AIMessageChunk(content="内部摘要"), {"langgraph_node": "summarize"}),
+        )
+        yield agent_service_module.GraphStreamEvent(
+            mode="messages",
+            data=(AIMessageChunk(content="粤菜"), {"langgraph_node": "respond"}),
+        )
+        yield agent_service_module.GraphStreamEvent(
+            mode="final_state",
+            data={"messages": [AIMessage(content="粤菜")]},
+        )
+
+    created_repositories.clear()
+    monkeypatch.setattr(agent_service_module, "ConversationRepository", FakeConversationRepository)
+    monkeypatch.setattr(agent_service_module, "stream_graph", fake_stream_graph)
+
+    service = AgentService(
+        checkpointer="checkpointer",
+        session_factory="session-factory",
+        settings=Settings(),
+    )
+
+    events = [
+        event
+        async for event in service.stream_chat(
+            thread_id="thread-1",
+            user_id="user-1",
+            message="今天吃什么？",
+        )
+    ]
+
+    assert ("token", {"type": "text", "content": "内部摘要"}) not in events
+    assert ("token", {"type": "text", "content": "粤菜"}) in events
