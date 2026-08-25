@@ -54,6 +54,8 @@ class EffectiveModelConfig:
     params: dict[str, object]
     credential: ProviderCredential | None
     digest: str
+    # 这次配置落库后的快照 id。assistant 消息会保存它，用来反查当时真实使用的模型配置。
+    snapshot_id: UUID | None = None
     model_profile_id: UUID | None = None
     model_profile_version: int | None = None
 
@@ -72,6 +74,8 @@ class EffectiveModelConfigSnapshot:
     model_name: str
     params: dict[str, object]
     config_digest: str
+    # PostgreSQL 保存快照后生成的主键 id；创建前可以为空。
+    id: UUID | None = None
     credential_id: UUID | None = None
     model_profile_id: UUID | None = None
     model_profile_version: int | None = None

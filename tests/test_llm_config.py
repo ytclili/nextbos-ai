@@ -15,6 +15,7 @@ class InMemoryModelRepository:
     def __init__(self, profile: ModelProfile | None = None):
         self.profile = profile
         self.saved_snapshot = None
+        self.saved_snapshot_id = uuid4()
 
     async def get_active_profile_by_alias(self, alias: str) -> ModelProfile | None:
         if self.profile and self.profile.alias == alias and self.profile.status == "active":
@@ -28,7 +29,18 @@ class InMemoryModelRepository:
 
     async def save_effective_snapshot(self, snapshot):
         self.saved_snapshot = snapshot
-        return snapshot
+        return type(snapshot)(
+            id=self.saved_snapshot_id,
+            source=snapshot.source,
+            provider=snapshot.provider,
+            base_url=snapshot.base_url,
+            model_name=snapshot.model_name,
+            params=snapshot.params,
+            config_digest=snapshot.config_digest,
+            credential_id=snapshot.credential_id,
+            model_profile_id=snapshot.model_profile_id,
+            model_profile_version=snapshot.model_profile_version,
+        )
 
 
 @pytest.mark.asyncio
@@ -52,6 +64,7 @@ async def test_resolver_uses_env_model_when_database_has_no_default_profile():
     assert config.params == {"temperature": 0.2, "timeout_seconds": 30}
     assert config.credential.api_key == "env-key"
     assert config.digest
+    assert config.snapshot_id == repository.saved_snapshot_id
     assert repository.saved_snapshot is not None
 
 

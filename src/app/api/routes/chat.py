@@ -53,11 +53,14 @@ class ChatResponse(BaseModel):
 
 @router.post("", response_model=ChatResponse)
 async def chat(request: ChatRequest, http: Request) -> ChatResponse:
+    trace_id = _current_trace_id()
+
     try:
         service = AgentService(
             http.app.state.checkpointer,
             http.app.state.session_factory,
             http.app.state.settings,
+            memory_store=http.app.state.memory_store,
         )
         content = await service.chat(
             thread_id=request.thread_id,
@@ -69,6 +72,7 @@ async def chat(request: ChatRequest, http: Request) -> ChatResponse:
                 if request.model_params
                 else None,
             ),
+            trace_id=trace_id,
         )
     except Exception as exc:
         raise HTTPException(
@@ -78,7 +82,7 @@ async def chat(request: ChatRequest, http: Request) -> ChatResponse:
 
     return ChatResponse(
         thread_id=request.thread_id,
-        trace_id=_current_trace_id(),
+        trace_id=trace_id,
         items=[
             ChatResponseItem(
                 type="text",

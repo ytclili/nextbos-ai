@@ -2,6 +2,7 @@ import logging
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langgraph.store.memory import InMemoryStore
 
 from app.agent.graph import build_graph
 from app.llm.models import EffectiveModelConfig, ProviderCredential
@@ -82,6 +83,111 @@ class ToolCallingChatModel(FakeChatModel):
         return AIMessage(content="工具系统正常")
 
 
+class MemoryManagingAgentModelRuntime(FakeAgentModelRuntime):
+    """先请求写入长期记忆，再返回最终回复。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.chat_model = MemoryManagingChatModel()
+
+
+class MemoryManagingChatModel(FakeChatModel):
+    """模拟模型调用 LangMem manage_memory 工具。"""
+
+    async def ainvoke(self, messages):
+        self.calls.append(messages)
+        if len(self.calls) == 1:
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "manage_memory",
+                        "args": {
+                            "content": "用户喜欢粤菜",
+                            "action": "create",
+                        },
+                        "id": "call-manage-memory",
+                    }
+                ],
+            )
+        return AIMessage(content="我已经记住了。")
+
+
+class MemorySearchingAgentModelRuntime(FakeAgentModelRuntime):
+    """先请求搜索长期记忆，再基于搜索结果返回最终回复。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.chat_model = MemorySearchingChatModel()
+
+
+class MemorySearchingChatModel(FakeChatModel):
+    """模拟模型调用 LangMem search_memory 工具。"""
+
+    async def ainvoke(self, messages):
+        self.calls.append(messages)
+        if len(self.calls) == 1:
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "search_memory",
+                        "args": {
+                            "query": "用户饮食偏好",
+                            "limit": 10,
+                        },
+                        "id": "call-search-memory",
+                    }
+                ],
+            )
+        return AIMessage(content="我查到你喜欢粤菜。")
+
+
+class RepeatedToolAgentModelRuntime(FakeAgentModelRuntime):
+    """模拟真实模型在工具可用时重复请求同一个工具。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.chat_models: list[RepeatedToolChatModel] = []
+
+    def create_chat_model(self, config: EffectiveModelConfig):
+        chat_model = RepeatedToolChatModel()
+        self.chat_models.append(chat_model)
+        return chat_model
+
+
+class RepeatedToolChatModel(FakeChatModel):
+    """只要绑定了工具就继续 tool_call，没有工具时才输出最终文本。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.tools_bound = False
+
+    def bind_tools(self, _tools):
+        self.tools_bound = True
+        return self
+
+    async def ainvoke(self, messages):
+        self.calls.append(messages)
+        if self.tools_bound:
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "manage_memory",
+                        "args": {
+                            "content": "用户喜欢粤菜",
+                            "action": "create",
+                        },
+                        "id": "call-repeated-manage-memory",
+                    }
+                ],
+            )
+        if any(isinstance(message, ToolMessage) for message in messages):
+            return AIMessage(content="我已经记住了。")
+        return AIMessage(content="没有看到工具结果。")
+
+
 @pytest.mark.asyncio
 async def test_graph_runs_start_to_respond_to_end_with_model_runtime() -> None:
     """graph 应该执行 respond 节点，并把模型回复追加到 messages。"""
@@ -133,3 +239,98 @@ async def test_graph_executes_tool_call_and_logs_tool_lifecycle(caplog) -> None:
     assert "agent.tool.started tool_name=health_check" in caplog.text
     assert "agent.tool.completed tool_name=health_check" in caplog.text
     assert "thread_id=thread-tool-test" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_graph_manage_memory_tool_writes_to_langgraph_store() -> None:
+    """LangMem manage_memory 工具应该写入 graph 编译时传入的 Store。"""
+
+    model_runtime = MemoryManagingAgentModelRuntime()
+    store = InMemoryStore()
+    graph = build_graph(model_runtime=model_runtime, store=store)
+
+    result = await graph.ainvoke(
+        {
+            "messages": [HumanMessage(content="请记住我喜欢粤菜")],
+            "model_options": None,
+            "thread_id": "thread-memory-tool-test",
+            "user_id": "user-memory-test",
+        },
+        config={
+            "configurable": {
+                "thread_id": "thread-memory-tool-test",
+                "langgraph_user_id": "user-memory-test",
+            }
+        },
+    )
+
+    memories = await store.asearch(("memories", "user-memory-test"), limit=10)
+
+    assert result["messages"][-1].content == "我已经记住了。"
+    assert any(memory.value["content"] == "用户喜欢粤菜" for memory in memories)
+
+
+@pytest.mark.asyncio
+async def test_graph_search_memory_tool_reads_from_langgraph_store() -> None:
+    """LangMem search_memory 工具应该读取 graph 编译时传入的 Store。"""
+
+    model_runtime = MemorySearchingAgentModelRuntime()
+    store = InMemoryStore()
+    await store.aput(
+        ("memories", "user-search-test"),
+        "memory-1",
+        {"content": "用户喜欢粤菜"},
+    )
+    graph = build_graph(model_runtime=model_runtime, store=store)
+
+    result = await graph.ainvoke(
+        {
+            "messages": [HumanMessage(content="你记得我的饮食偏好吗？")],
+            "model_options": None,
+            "thread_id": "thread-search-memory-test",
+            "user_id": "user-search-test",
+        },
+        config={
+            "configurable": {
+                "thread_id": "thread-search-memory-test",
+                "langgraph_user_id": "user-search-test",
+            }
+        },
+    )
+
+    tool_messages = [
+        message for message in result["messages"] if isinstance(message, ToolMessage)
+    ]
+
+    assert result["messages"][-1].content == "我查到你喜欢粤菜。"
+    assert any("用户喜欢粤菜" in str(message.content) for message in tool_messages)
+
+
+@pytest.mark.asyncio
+async def test_graph_uses_tool_free_final_response_after_tool_execution() -> None:
+    """工具执行后应该用不带工具的模型生成最终回复，避免工具循环。"""
+
+    model_runtime = RepeatedToolAgentModelRuntime()
+    store = InMemoryStore()
+    graph = build_graph(model_runtime=model_runtime, store=store)
+
+    result = await graph.ainvoke(
+        {
+            "messages": [HumanMessage(content="请记住我喜欢粤菜")],
+            "model_options": None,
+            "thread_id": "thread-repeated-tool-test",
+            "user_id": "user-repeated-tool-test",
+        },
+        config={
+            "configurable": {
+                "thread_id": "thread-repeated-tool-test",
+                "langgraph_user_id": "user-repeated-tool-test",
+            },
+            "recursion_limit": 8,
+        },
+    )
+
+    assert result["messages"][-1].content == "我已经记住了。"
+    assert len(model_runtime.chat_models) == 2
+    assert model_runtime.chat_models[0].tools_bound is True
+    assert model_runtime.chat_models[1].tools_bound is False

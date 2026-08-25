@@ -1,19 +1,22 @@
 from langchain_core.tools import BaseTool
 
 from app.tools.builtin.health import health_check
+from app.tools.builtin.memory import manage_memory, search_memory
 
 
 def get_builtin_tools() -> list[BaseTool]:
     """返回 agent 默认可用的内置工具。
 
     这里统一收口工具列表，避免 LangGraph 节点里到处 import 具体工具。
-    后续新增工具时，只需要在这里加入列表。
 
-    第一版先只放无副作用的健康检查工具。
+    health_check 是项目自己的健康检查工具。
+    search_memory / manage_memory 是 LangMem 官方长期记忆工具。
     """
 
     return [
         health_check,
+        search_memory,
+        manage_memory,
     ]
 
 

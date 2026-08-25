@@ -1,7 +1,11 @@
+from uuid import uuid4
+
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
+from langmem.short_term import SummarizationNode
 
 from app.agent.nodes.respond import create_respond_node
+from app.agent.nodes.summarize import create_summarize_node, skip_summarization
 from app.llm.models import EffectiveModelConfig, ProviderCredential
 
 
@@ -15,6 +19,8 @@ class FakeAgentModelRuntime:
     def __init__(self) -> None:
         self.resolve_calls: list[object | None] = []
         self.created_configs: list[EffectiveModelConfig] = []
+        self.chat_model: FakeChatModel | None = None
+        self.snapshot_id = uuid4()
 
     async def resolve_config(self, options: object | None) -> EffectiveModelConfig:
         """模拟模型配置解析。"""
@@ -33,13 +39,15 @@ class FakeAgentModelRuntime:
                 api_key="test-key",
             ),
             digest="digest",
+            snapshot_id=self.snapshot_id,
         )
 
     def create_chat_model(self, config: EffectiveModelConfig):
         """模拟创建 LangChain ChatModel。"""
 
         self.created_configs.append(config)
-        return FakeChatModel()
+        self.chat_model = FakeChatModel()
+        return self.chat_model
 
 
 class FakeChatModel:
@@ -79,3 +87,45 @@ async def test_respond_node_calls_model_runtime_and_returns_ai_message() -> None
     assert len(result["messages"]) == 1
     assert isinstance(result["messages"][0], AIMessage)
     assert result["messages"][0].content == "假模型回复"
+    assert result["llm_snapshot_id"] == model_runtime.snapshot_id
+
+
+@pytest.mark.asyncio
+async def test_respond_node_prefers_summarized_messages_for_llm_input() -> None:
+    """respond 节点应该优先把 summary 节点产出的消息传给大模型。"""
+
+    model_runtime = FakeAgentModelRuntime()
+    node = create_respond_node(model_runtime=model_runtime)
+    raw_messages = [HumanMessage(content="原始旧消息")]
+    summarized_messages = [HumanMessage(content="摘要后的消息")]
+
+    await node(
+        {
+            "messages": raw_messages,
+            "summarized_messages": summarized_messages,
+            "model_options": None,
+        }
+    )
+
+    assert model_runtime.chat_model is not None
+    assert model_runtime.chat_model.messages == summarized_messages
+
+
+def test_summarize_node_skips_when_model_is_missing() -> None:
+    """没有 summary 模型时，summarize 节点应该把 messages 原样传给 respond。"""
+
+    messages = [HumanMessage(content="今天吃什么？")]
+
+    assert skip_summarization({"messages": messages}) == {
+        "summarized_messages": messages,
+    }
+    assert create_summarize_node(None) is skip_summarization
+
+
+def test_summarize_node_uses_langmem_summarization_node_when_model_exists() -> None:
+    """有 summary 模型时，应该使用 LangMem 官方 SummarizationNode。"""
+
+    summary_model = object()
+    node = create_summarize_node(summary_model)
+
+    assert isinstance(node, SummarizationNode)

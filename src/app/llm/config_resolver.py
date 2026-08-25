@@ -1,6 +1,6 @@
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 from app.core.config import Settings
@@ -100,8 +100,7 @@ class ModelConfigResolver:
                 model_profile_id=profile.id,
                 model_profile_version=profile.version,
             )
-            await self._save_snapshot(config)
-            return config
+            return await self._save_snapshot(config)
 
         # env 是启动兜底：在后台管理或数据库 seed 创建默认模型前，服务也能跑通。
         params = {
@@ -125,15 +124,14 @@ class ModelConfigResolver:
             params=params,
             credential=credential,
         )
-        await self._save_snapshot(config)
-        return config
+        return await self._save_snapshot(config)
 
     async def _select_profile(self, selection: ModelSelection | None) -> ModelProfile | None:
         if selection and selection.model_alias:
             return await self.repository.get_active_profile_by_alias(selection.model_alias)
         return await self.repository.get_default_active_profile(scope="global")
 
-    async def _save_snapshot(self, config: EffectiveModelConfig) -> None:
+    async def _save_snapshot(self, config: EffectiveModelConfig) -> EffectiveModelConfig:
         # 快照只保存模型元数据和凭证引用。密钥值只留在内存对象里，不复制到快照行。
         with tracer.start_as_current_span("llm.config_snapshot.save") as span:
             span.set_attribute("llm.config.source", config.source)
@@ -141,7 +139,7 @@ class ModelConfigResolver:
             span.set_attribute("llm.config.model_name", config.model_name)
             span.set_attribute("llm.config.digest", config.digest)
 
-            await self.repository.save_effective_snapshot(
+            snapshot = await self.repository.save_effective_snapshot(
                 EffectiveModelConfigSnapshot(
                     source=config.source,
                     model_profile_id=config.model_profile_id,
@@ -154,6 +152,10 @@ class ModelConfigResolver:
                     config_digest=config.digest,
                 )
             )
+            span.set_attribute("llm.config.snapshot_id", str(snapshot.id) if snapshot.id else "")
+
+        # EffectiveModelConfig 是 frozen dataclass，所以用 replace 返回一份带 snapshot_id 的新对象。
+        return replace(config, snapshot_id=snapshot.id)
 
     def _build_config(
         self,

@@ -7,6 +7,7 @@ from app.api.router import router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.tracing import configure_tracing, shutdown_tracing
+from app.memory.long_term.store import postgres_memory_store
 from app.memory.short_term.checkpointer import redis_checkpointer
 from app.persistence.postgres.database import create_engine, initialize_agent_schema
 from app.persistence.postgres.session import create_session_factory
@@ -16,26 +17,27 @@ from app.persistence.postgres.session import create_session_factory
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     configure_logging(settings.log_level)
+    configure_tracing(app, settings)
 
-    # Postgres：服务启动时建好 engine 和 session_factory，供后续请求复用。
     engine = create_engine(settings)
-    session_factory = create_session_factory(engine=engine)
     await initialize_agent_schema(engine)
-    app.state.engine = engine
-    app.state.session_factory = session_factory
-    app.state.settings = settings
+    session_factory = create_session_factory(engine=engine)
 
-    try:
-        # Redis checkpointer：连接 + setup()（建索引）只在这里执行一次。
-        async with redis_checkpointer(settings) as checkpointer:
-            app.state.checkpointer = checkpointer
+    async with (
+        redis_checkpointer(settings) as checkpointer,
+        postgres_memory_store(settings) as memory_store,
+    ):
+        app.state.settings = settings
+        app.state.db_engine = engine
+        app.state.session_factory = session_factory
+        app.state.checkpointer = checkpointer
+        app.state.memory_store = memory_store
+        try:
             yield
-    finally:
-        await engine.dispose()
-        shutdown_tracing()
+        finally:
+            await engine.dispose()
+            shutdown_tracing()
 
 
-settings = get_settings()
-app = FastAPI(title=settings.app_name, lifespan=lifespan)
-configure_tracing(app, settings)
+app = FastAPI(title=get_settings().app_name, lifespan=lifespan)
 app.include_router(router)

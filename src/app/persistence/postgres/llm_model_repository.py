@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from dataclasses import replace
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -67,8 +68,10 @@ class PostgresLLMModelRepository:
             config_digest=snapshot.config_digest,
         )
         self.session.add(row)
+        await self.session.flush()
+        snapshot_with_id = replace(snapshot, id=row.id)
         await self.session.commit()
-        return snapshot
+        return snapshot_with_id
 
     async def _to_domain(self, row: LLMModelProfile) -> ModelProfile:
         """把 ORM 行转换成 LLM 领域模型。"""

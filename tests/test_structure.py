@@ -8,8 +8,8 @@ def test_graph_is_compiled():
     assert graph is not None
 
 
-def test_builtin_tool_registry_contains_health_check():
-    assert get_builtin_tool_names() == ["health_check"]
+def test_builtin_tool_registry_contains_builtin_tools():
+    assert get_builtin_tool_names() == ["health_check", "manage_memory", "search_memory"]
 
 
 def test_unknown_skill_returns_none(tmp_path):
