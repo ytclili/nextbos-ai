@@ -1,8 +1,8 @@
 from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from sqlalchemy import Select, desc, select, update
+from sqlalchemy import Select, desc, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -36,6 +36,151 @@ class ConversationRepository:
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self.session_factory = session_factory
+
+    async def create_thread(
+        self,
+        *,
+        user_id: str,
+        title: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> ConversationThread:
+        """创建一个空会话线程。
+
+        这个方法只写 conversation_threads：
+        - 不写 conversation_messages；
+        - 不创建 Redis checkpoint；
+        - 不调用 LangGraph / LLM。
+
+        chat 接口后续使用返回的 thread_id 继续发送消息。
+        """
+
+        now = datetime.now(UTC)
+        thread = ConversationThread(
+            thread_id=str(uuid4()),
+            user_id=user_id,
+            title=title or "新会话",
+            status=THREAD_STATUS_ACTIVE,
+            last_message_at=None,
+            message_count=0,
+            metadata_json=metadata or {},
+            created_at=now,
+            updated_at=now,
+        )
+
+        async with self.session_factory() as session:
+            async with session.begin():
+                session.add(thread)
+                await session.flush()
+
+        return thread
+
+    async def list_threads(
+        self,
+        *,
+        user_id: str,
+        limit: int = 20,
+    ) -> list[ConversationThread]:
+        """查询某个用户的会话列表。
+
+        这个方法只读 conversation_threads：
+        - 不扫描 messages 表；
+        - 不读取 Redis checkpoint；
+        - 不调用 LangGraph / LLM。
+
+        排序规则：
+        - 有消息的会话按 last_message_at 倒序；
+        - 空会话用 updated_at 兜底，避免刚创建的新会话列表里看不到。
+        """
+
+        statement: Select[tuple[ConversationThread]] = (
+            select(ConversationThread)
+            .where(ConversationThread.user_id == user_id)
+            .order_by(
+                desc(
+                    func.coalesce(
+                        ConversationThread.last_message_at,
+                        ConversationThread.updated_at,
+                    )
+                ),
+                desc(ConversationThread.created_at),
+            )
+            .limit(limit)
+        )
+
+        async with self.session_factory() as session:
+            rows = (await session.scalars(statement)).all()
+
+        return list(rows)
+
+    async def count_threads(self, *, user_id: str) -> int:
+        """统计某个用户的会话总数。
+
+        列表接口用它返回 total，方便前端知道当前用户一共有多少会话。
+        """
+
+        statement = (
+            select(func.count())
+            .select_from(ConversationThread)
+            .where(ConversationThread.user_id == user_id)
+        )
+
+        async with self.session_factory() as session:
+            total = await session.scalar(statement)
+
+        return int(total or 0)
+
+    async def list_messages(
+        self,
+        *,
+        thread_id: str,
+        user_id: str,
+        limit: int = 50,
+    ) -> list[ConversationMessage]:
+        """查询某个会话的最近 N 条历史消息。
+
+        历史记录从 PostgreSQL 的 conversation_messages 读取，不从 Redis checkpoint 读取。
+
+        返回顺序：
+        - 数据库先按 created_at 倒序取最近 N 条；
+        - 返回前再反转成旧到新，方便前端直接渲染聊天气泡。
+
+        这里同时过滤 thread_id 和 user_id，避免用户拿别人的 thread_id 查历史。
+        """
+
+        statement: Select[tuple[ConversationMessage]] = (
+            select(ConversationMessage)
+            .where(
+                ConversationMessage.thread_id == thread_id,
+                ConversationMessage.user_id == user_id,
+            )
+            .order_by(desc(ConversationMessage.created_at))
+            .limit(limit)
+        )
+
+        async with self.session_factory() as session:
+            rows = (await session.scalars(statement)).all()
+
+        return list(reversed(rows))
+
+    async def count_messages(self, *, thread_id: str, user_id: str) -> int:
+        """统计某个会话的消息总数。
+
+        列表接口用它返回 total；同样同时过滤 thread_id 和 user_id。
+        """
+
+        statement = (
+            select(func.count())
+            .select_from(ConversationMessage)
+            .where(
+                ConversationMessage.thread_id == thread_id,
+                ConversationMessage.user_id == user_id,
+            )
+        )
+
+        async with self.session_factory() as session:
+            total = await session.scalar(statement)
+
+        return int(total or 0)
 
     async def append_user_message(
         self,
