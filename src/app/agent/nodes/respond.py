@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -9,6 +10,7 @@ from app.agent.state import AgentState
 from app.core.tracing import get_tracer, set_span_attributes
 from app.tools.registry import get_builtin_tools
 
+logger = logging.getLogger(__name__)
 tracer = get_tracer(__name__)
 
 RespondNode = Callable[[AgentState], Awaitable[dict[str, Any]]]
@@ -64,6 +66,7 @@ def create_respond_node(
             tools = get_builtin_tools() if tools_enabled else []
             if tools:
                 chat_model = chat_model.bind_tools(tools)
+            tool_names = [tool.name for tool in tools]
 
             with tracer.start_as_current_span("llm.chat") as llm_span:
                 llm_span.set_attribute("llm.config.source", config.source)
@@ -77,7 +80,46 @@ def create_respond_node(
                 llm_span.set_attribute("llm.messages.count", len(model_messages))
                 llm_span.set_attribute("llm.tools.count", len(tools))
 
-                response = await chat_model.ainvoke(model_messages)
+                logger.info(
+                    (
+                        "llm.chat.request provider=%s base_url=%s model_name=%s "
+                        "api_key_set=%s messages_count=%s tools_count=%s tool_names=%s "
+                        "thread_id=%s user_id=%s"
+                    ),
+                    config.provider,
+                    config.base_url,
+                    config.model_name,
+                    bool(config.credential and config.credential.api_key),
+                    len(model_messages),
+                    len(tools),
+                    tool_names,
+                    state.get("thread_id", ""),
+                    state.get("user_id", ""),
+                )
+
+                try:
+                    response = await chat_model.ainvoke(model_messages)
+                except Exception as exc:
+                    logger.exception(
+                        (
+                            "llm.chat.failed provider=%s base_url=%s model_name=%s "
+                            "messages_count=%s tools_count=%s tool_names=%s "
+                            "thread_id=%s user_id=%s error_type=%s status_code=%s "
+                            "response_body=%s"
+                        ),
+                        config.provider,
+                        config.base_url,
+                        config.model_name,
+                        len(model_messages),
+                        len(tools),
+                        tool_names,
+                        state.get("thread_id", ""),
+                        state.get("user_id", ""),
+                        type(exc).__name__,
+                        _error_status_code(exc),
+                        _short_text(_error_response_text(exc)),
+                    )
+                    raise
 
                 if not isinstance(response, AIMessage):
                     raise TypeError("LangChain chat model returned a non-AIMessage response")
@@ -94,3 +136,33 @@ def create_respond_node(
             }
 
     return respond
+
+
+def _error_status_code(exc: Exception) -> object:
+    """从供应商异常里尽量提取 HTTP 状态码。"""
+
+    response = getattr(exc, "response", None)
+    return getattr(response, "status_code", "")
+
+
+def _error_response_text(exc: Exception) -> str:
+    """从供应商异常里尽量提取响应体，方便排查 400。"""
+
+    response = getattr(exc, "response", None)
+    text = getattr(response, "text", "")
+    if text:
+        return str(text)
+
+    body = getattr(exc, "body", "")
+    if body:
+        return str(body)
+
+    return str(exc)
+
+
+def _short_text(value: str, *, max_length: int = 2000) -> str:
+    """把响应体截断后写日志，避免控制台被大响应刷屏。"""
+
+    if len(value) <= max_length:
+        return value
+    return f"{value[:max_length]}...(truncated, length={len(value)})"

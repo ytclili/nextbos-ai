@@ -2,6 +2,7 @@ from langchain_core.tools import BaseTool
 
 from app.tools.builtin.health import health_check
 from app.tools.builtin.memory import manage_memory, search_memory
+from app.tools.business.dashboard import get_dashboard
 
 
 def get_builtin_tools() -> list[BaseTool]:
@@ -11,10 +12,12 @@ def get_builtin_tools() -> list[BaseTool]:
 
     health_check 是项目自己的健康检查工具。
     search_memory / manage_memory 是 LangMem 官方长期记忆工具。
+    get_dashboard 是收单吧业务经营看板查询工具。
     """
 
     return [
         health_check,
+        get_dashboard,
         search_memory,
         manage_memory,
     ]

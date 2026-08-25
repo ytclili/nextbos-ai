@@ -9,7 +9,12 @@ def test_graph_is_compiled():
 
 
 def test_builtin_tool_registry_contains_builtin_tools():
-    assert get_builtin_tool_names() == ["health_check", "manage_memory", "search_memory"]
+    assert get_builtin_tool_names() == [
+        "get_dashboard",
+        "health_check",
+        "manage_memory",
+        "search_memory",
+    ]
 
 
 def test_unknown_skill_returns_none(tmp_path):

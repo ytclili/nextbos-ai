@@ -2,9 +2,11 @@ import logging
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tools import tool
 from langgraph.store.memory import InMemoryStore
 
 from app.agent.graph import build_graph
+from app.agent.nodes import tools as tools_module
 from app.llm.models import EffectiveModelConfig, ProviderCredential
 
 
@@ -188,6 +190,37 @@ class RepeatedToolChatModel(FakeChatModel):
         return AIMessage(content="没有看到工具结果。")
 
 
+class FailingToolAgentModelRuntime(FakeAgentModelRuntime):
+    """先请求失败工具，再基于错误 ToolMessage 返回最终回复。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.chat_model = FailingToolChatModel()
+
+
+class FailingToolChatModel(FakeChatModel):
+    """模拟模型调用一个会失败的工具。"""
+
+    async def ainvoke(self, messages):
+        self.calls.append(messages)
+        if len(self.calls) == 1:
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "failing_tool",
+                        "args": {},
+                        "id": "call-failing-tool",
+                    }
+                ],
+            )
+        assert any(
+            isinstance(message, ToolMessage) and message.status == "error"
+            for message in messages
+        )
+        return AIMessage(content="业务接口暂时不可用，请稍后再试。")
+
+
 @pytest.mark.asyncio
 async def test_graph_runs_start_to_respond_to_end_with_model_runtime() -> None:
     """graph 应该执行 respond 节点，并把模型回复追加到 messages。"""
@@ -241,6 +274,45 @@ async def test_graph_executes_tool_call_and_logs_tool_lifecycle(caplog) -> None:
     assert "agent.tool.started tool_name=health_check" in caplog.text
     assert "agent.tool.completed tool_name=health_check" in caplog.text
     assert "thread_id=thread-tool-test" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_graph_continues_when_tool_returns_error_message(monkeypatch) -> None:
+    """工具执行失败时，graph 应该保留错误 ToolMessage，并继续生成最终回复。"""
+
+    @tool
+    async def failing_tool() -> str:
+        """测试用失败工具。"""
+
+        raise RuntimeError("业务接口不可用")
+
+    monkeypatch.setattr(tools_module, "get_builtin_tools", lambda: [failing_tool])
+    model_runtime = FailingToolAgentModelRuntime()
+    graph = build_graph(model_runtime=model_runtime)
+
+    result = await graph.ainvoke(
+        {
+            "messages": [HumanMessage(content="查询经营看板")],
+            "model_options": None,
+            "thread_id": "thread-tool-error-test",
+            "user_id": "user-1",
+        },
+        config={
+            "configurable": {
+                "thread_id": "thread-tool-error-test",
+                "langgraph_user_id": "user-1",
+            }
+        },
+    )
+
+    tool_messages = [message for message in result["messages"] if isinstance(message, ToolMessage)]
+
+    assert len(model_runtime.chat_model.calls) == 2
+    assert tool_messages
+    assert tool_messages[0].tool_call_id == "call-failing-tool"
+    assert tool_messages[0].status == "error"
+    assert "工具执行失败：RuntimeError: 业务接口不可用" in tool_messages[0].content
+    assert result["messages"][-1].content == "业务接口暂时不可用，请稍后再试。"
 
 
 @pytest.mark.asyncio

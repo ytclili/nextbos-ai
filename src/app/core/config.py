@@ -13,6 +13,12 @@ class Settings(BaseSettings):
     redis_checkpoint_ttl_seconds: int = 604800
     postgres_dsn: str = "postgresql+asyncpg://agent:agent@localhost:5432/agent_runtime"
 
+    # 核心业务系统内部接口配置。
+    # 第一版业务工具只用 mock token 调接口，不做 HMAC 签名和复杂鉴权。
+    core_internal_base_url: str = ""
+    core_internal_token: str = ""
+    core_internal_timeout_seconds: float = 10.0
+
     # LLM 运行时配置：.env 中的是默认值/兜底值，后续可被后台动态配置覆盖
     llm_provider: str = "none"  # none=不启用 LLM（回显模式）；openai=OpenAI 兼容接口
     llm_base_url: str = ""
