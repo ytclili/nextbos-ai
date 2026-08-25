@@ -4,6 +4,7 @@ from typing import Any
 from langchain_core.messages import AIMessage
 
 from app.agent.model_runtime import AgentModelRuntime
+from app.agent.prompts.renderer import prepend_system_prompt
 from app.agent.state import AgentState
 from app.core.tracing import get_tracer, set_span_attributes
 from app.tools.registry import get_builtin_tools
@@ -49,10 +50,12 @@ def create_respond_node(
                 messages = state.get("summarized_messages") or raw_messages
             else:
                 messages = raw_messages
+            model_messages = prepend_system_prompt(messages)
 
             span.set_attribute("agent.node.name", "respond")
             span.set_attribute("agent.messages.count", len(raw_messages))
             span.set_attribute("agent.summarized_messages.count", len(messages))
+            span.set_attribute("agent.model_messages.count", len(model_messages))
             span.set_attribute("agent.thread_id", state.get("thread_id", ""))
             span.set_attribute("agent.user_id", state.get("user_id", ""))
 
@@ -71,10 +74,10 @@ def create_respond_node(
                 llm_span.set_attribute("llm.provider", config.provider)
                 llm_span.set_attribute("llm.model_name", config.model_name)
                 llm_span.set_attribute("llm.config.digest", config.digest)
-                llm_span.set_attribute("llm.messages.count", len(messages))
+                llm_span.set_attribute("llm.messages.count", len(model_messages))
                 llm_span.set_attribute("llm.tools.count", len(tools))
 
-                response = await chat_model.ainvoke(messages)
+                response = await chat_model.ainvoke(model_messages)
 
                 if not isinstance(response, AIMessage):
                     raise TypeError("LangChain chat model returned a non-AIMessage response")

@@ -1,7 +1,7 @@
 from uuid import uuid4
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langmem.short_term import SummarizationNode
 
 from app.agent.nodes.respond import create_respond_node
@@ -112,7 +112,32 @@ async def test_respond_node_prefers_summarized_messages_for_llm_input() -> None:
     )
 
     assert model_runtime.chat_model is not None
-    assert model_runtime.chat_model.messages == summarized_messages
+    model_messages = model_runtime.chat_model.messages
+    assert isinstance(model_messages[0], SystemMessage)
+    assert model_messages[1:] == summarized_messages
+
+
+@pytest.mark.asyncio
+async def test_respond_node_prepends_system_prompt_without_persisting_it() -> None:
+    """respond 节点应该把系统提示词放到模型输入首位，但不写回 graph state。"""
+
+    model_runtime = FakeAgentModelRuntime()
+    node = create_respond_node(model_runtime=model_runtime)
+    raw_messages = [HumanMessage(content="今天回款怎么样？")]
+
+    result = await node(
+        {
+            "messages": raw_messages,
+            "model_options": None,
+        }
+    )
+
+    assert model_runtime.chat_model is not None
+    model_messages = model_runtime.chat_model.messages
+    assert isinstance(model_messages[0], SystemMessage)
+    assert "收单吧" in model_messages[0].content
+    assert model_messages[1:] == raw_messages
+    assert result["messages"] == [AIMessage(content="假模型回复")]
 
 
 def test_summarize_node_skips_when_model_is_missing() -> None:

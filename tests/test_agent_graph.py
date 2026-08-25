@@ -1,7 +1,7 @@
 import logging
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.store.memory import InMemoryStore
 
 from app.agent.graph import build_graph
@@ -206,8 +206,10 @@ async def test_graph_runs_start_to_respond_to_end_with_model_runtime() -> None:
 
     called_messages = model_runtime.chat_model.calls[0]
     assert isinstance(called_messages, list)
-    assert isinstance(called_messages[0], HumanMessage)
-    assert called_messages[0].content == "今天吃什么？"
+    assert isinstance(called_messages[0], SystemMessage)
+    assert "收单吧" in called_messages[0].content
+    assert isinstance(called_messages[1], HumanMessage)
+    assert called_messages[1].content == "今天吃什么？"
 
     assert "messages" in result
     assert len(result["messages"]) == 2
