@@ -5,7 +5,11 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langmem.short_term import SummarizationNode
 
 from app.agent.nodes.respond import create_respond_node
-from app.agent.nodes.summarize import create_summarize_node, skip_summarization
+from app.agent.nodes.summarize import (
+    SummaryOptions,
+    create_summarize_node,
+    skip_summarization,
+)
 from app.llm.models import EffectiveModelConfig, ProviderCredential
 
 
@@ -126,6 +130,16 @@ def test_summarize_node_uses_langmem_summarization_node_when_model_exists() -> N
     """有 summary 模型时，应该使用 LangMem 官方 SummarizationNode。"""
 
     summary_model = object()
-    node = create_summarize_node(summary_model)
+    node = create_summarize_node(
+        summary_model,
+        options=SummaryOptions(
+            max_tokens=1200,
+            trigger_tokens=900,
+            max_output_tokens=300,
+        ),
+    )
 
     assert isinstance(node, SummarizationNode)
+    assert node.max_tokens == 1200
+    assert node.max_tokens_before_summary == 900
+    assert node.max_summary_tokens == 300

@@ -7,7 +7,7 @@ from langgraph.store.base import BaseStore
 
 from app.agent.model_runtime import AgentModelRuntime
 from app.agent.nodes.respond import create_respond_node
-from app.agent.nodes.summarize import create_summarize_node
+from app.agent.nodes.summarize import SummaryOptions, create_summarize_node
 from app.agent.nodes.tools import create_tools_node
 from app.agent.state import AgentState
 
@@ -29,6 +29,7 @@ def build_graph(
     model_runtime: AgentModelRuntime | None = None,
     store: BaseStore | None = None,
     summarization_model: Any | None = None,
+    summary_options: SummaryOptions | None = None,
 ):
     """构建 agent 执行图。
 
@@ -64,7 +65,10 @@ def build_graph(
         else fallback_respond
     )
 
-    builder.add_node("summarize", create_summarize_node(summarization_model))
+    builder.add_node(
+        "summarize",
+        create_summarize_node(summarization_model, options=summary_options),
+    )
     builder.add_node("respond", respond_node)
     builder.add_node("tools", create_tools_node())
     builder.add_node("final_respond", final_respond_node)

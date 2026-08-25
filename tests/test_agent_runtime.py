@@ -84,11 +84,19 @@ async def test_run_graph_passes_memory_store_and_langgraph_user_id(monkeypatch) 
             captured["config"] = config
             return {"messages": [AIMessage(content="ok")]}
 
-    def fake_build_graph(*, checkpointer, model_runtime, store, summarization_model):
+    def fake_build_graph(
+        *,
+        checkpointer,
+        model_runtime,
+        store,
+        summarization_model,
+        summary_options,
+    ):
         captured["checkpointer"] = checkpointer
         captured["model_runtime"] = model_runtime
         captured["store"] = store
         captured["summarization_model"] = summarization_model
+        captured["summary_options"] = summary_options
         return FakeRunnable()
 
     monkeypatch.setattr(runtime_module, "AgentModelRuntime", FakeAgentModelRuntime)
@@ -102,7 +110,11 @@ async def test_run_graph_passes_memory_store_and_langgraph_user_id(monkeypatch) 
         message="今天吃什么？",
         model_options=model_options,
         session_factory=FakeSessionFactory(),
-        settings=Settings(),
+        settings=Settings(
+            summary_max_tokens=1200,
+            summary_trigger_tokens=900,
+            summary_max_output_tokens=300,
+        ),
         memory_store=memory_store,
     )
 
@@ -118,6 +130,9 @@ async def test_run_graph_passes_memory_store_and_langgraph_user_id(monkeypatch) 
     assert captured["model_options"] is model_options
     assert captured["summary_model_config"].model_name == "test-model"
     assert captured["summarization_model"] is summarization_model
+    assert captured["summary_options"].max_tokens == 1200
+    assert captured["summary_options"].trigger_tokens == 900
+    assert captured["summary_options"].max_output_tokens == 300
     assert isinstance(captured["state"]["messages"][0], HumanMessage)
     assert captured["state"]["messages"][0].content == "今天吃什么？"
     assert captured["config"] == {
@@ -186,11 +201,19 @@ async def test_run_graph_restores_messages_from_postgres_when_checkpoint_is_miss
             captured["config"] = config
             return {"messages": [AIMessage(content="小亮。")]}
 
-    def fake_build_graph(*, checkpointer, model_runtime, store, summarization_model):
+    def fake_build_graph(
+        *,
+        checkpointer,
+        model_runtime,
+        store,
+        summarization_model,
+        summary_options,
+    ):
         captured["checkpointer"] = checkpointer
         captured["model_runtime"] = model_runtime
         captured["store"] = store
         captured["summarization_model"] = summarization_model
+        captured["summary_options"] = summary_options
         return FakeRunnable()
 
     monkeypatch.setattr(runtime_module, "AgentModelRuntime", FakeAgentModelRuntime)

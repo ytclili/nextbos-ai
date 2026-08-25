@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.agent.options import ChatModelOptions
 from app.agent.runtime import run_graph
 from app.conversation.repository import ConversationRepository
+from app.conversation.summary import extract_running_summary
 from app.core.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -81,6 +82,17 @@ class AgentService:
             trace_id=trace_id,
             llm_snapshot_id=llm_snapshot_id,
         )
+
+        # 如果 LangMem summary 节点产出了 rolling summary，就把它持久化。
+        # 这仍然是短事务，不会跨 LLM 调用持有数据库事务。
+        if summary := extract_running_summary(result):
+            await self.conversation_repository.save_summary(
+                thread_id=thread_id,
+                user_id=user_id,
+                summary=summary.summary,
+                covered_through_message_id=summary.covered_through_message_id,
+                message_count=summary.message_count,
+            )
 
         logger.info(
             "agent.chat.completed thread_id=%s user_id=%s output_length=%s",

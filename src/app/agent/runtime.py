@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.graph import build_graph
 from app.agent.model_runtime import AgentModelRuntime
+from app.agent.nodes.summarize import SummaryOptions
 from app.agent.options import ChatModelOptions
 from app.conversation.context_loader import ConversationContextLoader
 from app.conversation.repository import ConversationRepository
@@ -77,6 +78,11 @@ async def run_graph(
                 model_runtime=model_runtime,
                 store=memory_store,
                 summarization_model=summarization_model,
+                summary_options=SummaryOptions(
+                    max_tokens=settings.summary_max_tokens,
+                    trigger_tokens=settings.summary_trigger_tokens,
+                    max_output_tokens=settings.summary_max_output_tokens,
+                ),
             )
             return await runnable.ainvoke(
                 {

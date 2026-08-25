@@ -21,6 +21,12 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.7
     llm_timeout_seconds: int = 60
 
+    # LangMem 短期上下文压缩配置。
+    # 超过 trigger 后触发 rolling summary，最终模型输入尽量控制在 max_tokens 内。
+    summary_max_tokens: int = 8000
+    summary_trigger_tokens: int = 6000
+    summary_max_output_tokens: int = 800
+
     # 后台动态配置落库时对 api_key 做应用层加密的密钥（预留）
     config_encryption_key: str = ""
 
