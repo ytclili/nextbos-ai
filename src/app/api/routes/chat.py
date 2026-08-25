@@ -1,10 +1,11 @@
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from opentelemetry import trace
 from pydantic import BaseModel, Field
 
 from app.agent.options import ChatModelOptions
+from app.api.errors import map_exception_to_http_error
 from app.services.agent_service import AgentService
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -75,10 +76,7 @@ async def chat(request: ChatRequest, http: Request) -> ChatResponse:
             trace_id=trace_id,
         )
     except Exception as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=f"agent infrastructure unavailable: {exc}",
-        ) from exc
+        raise map_exception_to_http_error(exc) from exc
 
     return ChatResponse(
         thread_id=request.thread_id,

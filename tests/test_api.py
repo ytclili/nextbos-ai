@@ -123,6 +123,40 @@ def test_chat_endpoint_passes_trace_id_to_agent_service(monkeypatch):
     ]
 
 
+def test_chat_endpoint_maps_timeout_to_structured_504(monkeypatch):
+    """chat 接口应该把 timeout 映射成前端可识别的结构化错误。"""
+
+    class TimeoutAgentService:
+        def __init__(self, checkpointer, session_factory, settings, memory_store=None):
+            pass
+
+        async def chat(self, **kwargs):
+            raise TimeoutError("Request timed out.")
+
+    monkeypatch.setattr(chat_route_module, "AgentService", TimeoutAgentService)
+
+    app.state.checkpointer = "checkpointer"
+    app.state.session_factory = "session-factory"
+    app.state.settings = Settings()
+    app.state.memory_store = "memory-store"
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/v1/chat",
+        json={
+            "thread_id": "thread-1",
+            "user_id": "user-1",
+            "message": "写一篇 2000 字作文",
+        },
+    )
+
+    assert response.status_code == 504
+    assert response.json()["detail"] == {
+        "code": "llm_timeout",
+        "message": "模型请求超时，请稍后重试或缩短输入。",
+    }
+
+
 def test_lifespan_attaches_memory_store(monkeypatch):
     """应用启动时应该把长期记忆 Store 挂到 app.state。"""
 
