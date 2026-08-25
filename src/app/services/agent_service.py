@@ -2,7 +2,7 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -147,6 +147,9 @@ class AgentService:
                 if token:
                     accumulated_tokens.append(token)
                     yield ("token", {"type": "text", "content": token})
+            elif event.mode == "updates":
+                for tool_event in _extract_tool_events(event):
+                    yield tool_event
             elif event.mode == "final_state":
                 final_state = dict(event.data or {})
 
@@ -231,6 +234,95 @@ def _extract_token(event: GraphStreamEvent) -> str:
     return str(content) if content else ""
 
 
+def _extract_tool_events(event: GraphStreamEvent) -> list[tuple[str, dict[str, Any]]]:
+    """从 LangGraph updates 事件中提取工具状态事件。"""
+
+    if not isinstance(event.data, dict):
+        return []
+
+    events: list[tuple[str, dict[str, Any]]] = []
+    for node_name, update in event.data.items():
+        if node_name == "respond":
+            events.extend(_tool_start_events(update))
+        elif node_name == "tools":
+            events.extend(_tool_result_events(update))
+    return events
+
+
+def _tool_start_events(update: Any) -> list[tuple[str, dict[str, Any]]]:
+    """从 respond 节点 update 里提取 tool_start 事件。"""
+
+    events: list[tuple[str, dict[str, Any]]] = []
+    for message in _update_messages(update):
+        if not isinstance(message, AIMessage):
+            continue
+        for tool_call in message.tool_calls or []:
+            name = str(tool_call.get("name", ""))
+            tool_call_id = str(tool_call.get("id", ""))
+            if not name:
+                continue
+            events.append(
+                (
+                    "tool_start",
+                    {
+                        "name": name,
+                        "tool_call_id": tool_call_id,
+                        "message": f"正在调用 {name}",
+                    },
+                )
+            )
+    return events
+
+
+def _tool_result_events(update: Any) -> list[tuple[str, dict[str, Any]]]:
+    """从 tools 节点 update 里提取 tool_end / tool_error 事件。"""
+
+    events: list[tuple[str, dict[str, Any]]] = []
+    for message in _update_messages(update):
+        if not isinstance(message, ToolMessage):
+            continue
+
+        name = str(message.name or "")
+        tool_call_id = str(message.tool_call_id or "")
+        status = str(getattr(message, "status", "success") or "success")
+        if status == "error":
+            events.append(
+                (
+                    "tool_error",
+                    {
+                        "name": name,
+                        "tool_call_id": tool_call_id,
+                        "status": status,
+                        "message": _message_content_to_text(message.content),
+                    },
+                )
+            )
+        else:
+            events.append(
+                (
+                    "tool_end",
+                    {
+                        "name": name,
+                        "tool_call_id": tool_call_id,
+                        "status": status,
+                    },
+                )
+            )
+    return events
+
+
+def _update_messages(update: Any) -> list[Any]:
+    """从 LangGraph node update 中读取 messages 列表。"""
+
+    if not isinstance(update, dict):
+        return []
+
+    messages = update.get("messages") or []
+    if isinstance(messages, list):
+        return messages
+    return [messages]
+
+
 def _is_frontend_token_event(event: GraphStreamEvent) -> bool:
     """判断这个 messages 事件是否应该推给前端。
 
@@ -260,6 +352,16 @@ def _content_part_to_text(part: Any) -> str:
     return ""
 
 
+def _message_content_to_text(content: Any) -> str:
+    """把 LangChain message content 转成可展示文本。"""
+
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(_content_part_to_text(part) for part in content)
+    return str(content) if content else ""
+
+
 def _extract_final_content(state: dict[str, Any]) -> str:
     """从最终 LangGraph state 中提取 assistant 完整文本。"""
 
@@ -273,8 +375,4 @@ def _extract_final_content(state: dict[str, Any]) -> str:
     else:
         content = getattr(last_message, "content", "")
 
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "".join(_content_part_to_text(part) for part in content)
-    return str(content) if content else ""
+    return _message_content_to_text(content)

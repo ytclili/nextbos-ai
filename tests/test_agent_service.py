@@ -1,6 +1,6 @@
 from uuid import uuid4
 
-from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langmem.short_term import RunningSummary
 
 import app.services.agent_service as agent_service_module
@@ -296,3 +296,82 @@ async def test_agent_service_stream_skips_summary_model_tokens(monkeypatch) -> N
 
     assert ("token", {"type": "text", "content": "内部摘要"}) not in events
     assert ("token", {"type": "text", "content": "粤菜"}) in events
+
+
+async def test_agent_service_stream_emits_tool_status_events(monkeypatch) -> None:
+    """stream_chat 应该把工具调用开始/结束转换成前端事件。"""
+
+    async def fake_stream_graph(*args, **kwargs):
+        yield agent_service_module.GraphStreamEvent(
+            mode="updates",
+            data={
+                "respond": {
+                    "messages": [
+                        AIMessage(
+                            content="",
+                            tool_calls=[
+                                {
+                                    "name": "search_memory",
+                                    "args": {"query": "用户喜欢吃什么"},
+                                    "id": "call-1",
+                                }
+                            ],
+                        )
+                    ]
+                }
+            },
+        )
+        yield agent_service_module.GraphStreamEvent(
+            mode="updates",
+            data={
+                "tools": {
+                    "messages": [
+                        ToolMessage(
+                            content="用户喜欢粤菜。",
+                            tool_call_id="call-1",
+                            name="search_memory",
+                        )
+                    ]
+                }
+            },
+        )
+        yield agent_service_module.GraphStreamEvent(
+            mode="final_state",
+            data={"messages": [AIMessage(content="你之前说过喜欢粤菜。")]},
+        )
+
+    created_repositories.clear()
+    monkeypatch.setattr(agent_service_module, "ConversationRepository", FakeConversationRepository)
+    monkeypatch.setattr(agent_service_module, "stream_graph", fake_stream_graph)
+
+    service = AgentService(
+        checkpointer="checkpointer",
+        session_factory="session-factory",
+        settings=Settings(),
+    )
+
+    events = [
+        event
+        async for event in service.stream_chat(
+            thread_id="thread-1",
+            user_id="user-1",
+            message="我喜欢吃什么？",
+        )
+    ]
+
+    assert (
+        "tool_start",
+        {
+            "name": "search_memory",
+            "tool_call_id": "call-1",
+            "message": "正在调用 search_memory",
+        },
+    ) in events
+    assert (
+        "tool_end",
+        {
+            "name": "search_memory",
+            "tool_call_id": "call-1",
+            "status": "success",
+        },
+    ) in events

@@ -146,6 +146,22 @@ def test_chat_stream_endpoint_returns_sse_events(monkeypatch):
             calls.append(("stream_chat", kwargs))
             yield ("start", {"code": 200, "status": "success", "thread_id": kwargs["thread_id"]})
             yield ("token", {"type": "text", "content": "粤"})
+            yield (
+                "tool_start",
+                {
+                    "name": "search_memory",
+                    "tool_call_id": "call-1",
+                    "message": "正在调用 search_memory",
+                },
+            )
+            yield (
+                "tool_end",
+                {
+                    "name": "search_memory",
+                    "tool_call_id": "call-1",
+                    "status": "success",
+                },
+            )
             yield ("token", {"type": "text", "content": "菜"})
             yield ("done", {"content": "粤菜"})
 
@@ -174,6 +190,14 @@ def test_chat_stream_endpoint_returns_sse_events(monkeypatch):
     assert response.headers["content-type"].startswith("text/event-stream")
     assert 'event: start\ndata: {"code":200,"status":"success","thread_id":"thread-1"}' in body
     assert 'event: token\ndata: {"type":"text","content":"粤"}' in body
+    assert (
+        'event: tool_start\ndata: {"name":"search_memory","tool_call_id":"call-1",'
+        '"message":"正在调用 search_memory"}'
+    ) in body
+    assert (
+        'event: tool_end\ndata: {"name":"search_memory","tool_call_id":"call-1",'
+        '"status":"success"}'
+    ) in body
     assert 'event: token\ndata: {"type":"text","content":"菜"}' in body
     assert 'event: done\ndata: {"content":"粤菜"}' in body
     assert calls == [
