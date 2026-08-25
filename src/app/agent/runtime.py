@@ -5,6 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.agent.graph import build_graph
 from app.agent.model_runtime import AgentModelRuntime
 from app.agent.options import ChatModelOptions
+from app.conversation.context_loader import ConversationContextLoader
+from app.conversation.repository import ConversationRepository
 from app.core.config import Settings
 from app.core.tracing import get_tracer
 from app.llm.config_resolver import ModelConfigResolver
@@ -31,12 +33,24 @@ async def run_graph(
 
     memory_store 是 LangGraph 官方 Store，给长期记忆工具使用。
     summarization_model 是 LangMem 官方 SummarizationNode 使用的摘要模型。
+
+    如果 Redis checkpoint 还在，就让 LangGraph 按 thread_id 自动续上短期上下文；
+    如果 Redis checkpoint 已经过期，就从 PostgreSQL conversation 记录恢复最近上下文。
     """
 
     with tracer.start_as_current_span("agent.run") as span:
         span.set_attribute("agent.thread_id", thread_id)
         span.set_attribute("agent.user_id", user_id)
         span.set_attribute("agent.input_length", len(message))
+
+        graph_config = {
+            "configurable": {
+                "thread_id": thread_id,
+                "langgraph_user_id": user_id,
+            }
+        }
+        checkpoint_exists = await _checkpoint_exists(checkpointer, graph_config)
+        span.set_attribute("agent.checkpoint.exists", checkpoint_exists)
 
         async with session_factory() as session:
             model_repository = PostgresLLMModelRepository(session)
@@ -46,6 +60,18 @@ async def run_graph(
             model_config = await model_runtime.resolve_config(model_options)
             summarization_model = model_runtime.create_chat_model(model_config)
 
+            if checkpoint_exists:
+                messages = [HumanMessage(content=message)]
+            else:
+                context_loader = ConversationContextLoader(
+                    ConversationRepository(session_factory),
+                )
+                messages = await context_loader.load_messages(thread_id=thread_id)
+                if not messages:
+                    messages = [HumanMessage(content=message)]
+
+            span.set_attribute("agent.restore.messages.count", len(messages))
+
             runnable = build_graph(
                 checkpointer=checkpointer,
                 model_runtime=model_runtime,
@@ -54,15 +80,21 @@ async def run_graph(
             )
             return await runnable.ainvoke(
                 {
-                    "messages": [HumanMessage(content=message)],
+                    "messages": messages,
                     "thread_id": thread_id,
                     "user_id": user_id,
                     "model_options": model_options,
                 },
-                config={
-                    "configurable": {
-                        "thread_id": thread_id,
-                        "langgraph_user_id": user_id,
-                    }
-                },
+                config=graph_config,
             )
+
+
+async def _checkpoint_exists(checkpointer: BaseCheckpointSaver, config: dict) -> bool:
+    """判断当前 thread_id 是否已经有 LangGraph checkpoint。
+
+    Redis checkpoint 存在时，LangGraph 会自己从 checkpoint 续上下文；
+    Redis checkpoint 不存在时，runtime 才需要从 PostgreSQL conversation 恢复。
+    """
+
+    checkpoint = await checkpointer.aget_tuple(config)
+    return checkpoint is not None
