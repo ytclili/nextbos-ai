@@ -34,21 +34,28 @@ def test_chat_model_params_validation_rejects_invalid_temperature():
 
 def test_chat_response_schema_contains_frontend_render_items():
     schema = app.openapi()["components"]["schemas"]["ChatResponse"]
+    data_schema = app.openapi()["components"]["schemas"]["ChatResponseData"]
 
+    assert "code" in schema["properties"]
     assert "status" in schema["properties"]
-    assert "thread_id" in schema["properties"]
-    assert "trace_id" in schema["properties"]
-    assert "items" in schema["properties"]
+    assert "message" in schema["properties"]
+    assert "data" in schema["properties"]
+    assert "thread_id" in data_schema["properties"]
+    assert "trace_id" in data_schema["properties"]
+    assert "items" in data_schema["properties"]
 
 
 def test_chat_response_schema_does_not_expose_internal_observability_fields():
     """chat 响应不应该把后端观测细节直接暴露给前端。"""
 
     schema = app.openapi()["components"]["schemas"]["ChatResponse"]
+    data_schema = app.openapi()["components"]["schemas"]["ChatResponseData"]
     item_schema = app.openapi()["components"]["schemas"]["ChatResponseItem"]
 
     assert "usage" not in schema["properties"]
     assert "raw" not in schema["properties"]
+    assert "usage" not in data_schema["properties"]
+    assert "raw" not in data_schema["properties"]
     assert "usage" not in item_schema["properties"]
     assert "raw" not in item_schema["properties"]
 
@@ -96,7 +103,9 @@ def test_chat_endpoint_passes_trace_id_to_agent_service(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert response.json()["trace_id"] == "trace-123"
+    assert response.json()["code"] == 200
+    assert response.json()["message"] == "success"
+    assert response.json()["data"]["trace_id"] == "trace-123"
     assert calls == [
         (
             "init",

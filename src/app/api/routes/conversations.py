@@ -33,6 +33,15 @@ class ConversationResponse(BaseModel):
     updated_at: datetime
 
 
+class ConversationCreateResponse(BaseModel):
+    """创建会话接口统一响应。"""
+
+    code: int = 200
+    status: str = "success"
+    message: str = "success"
+    data: ConversationResponse
+
+
 class ConversationListResponse(BaseModel):
     """会话列表统一响应。"""
 
@@ -130,11 +139,11 @@ async def list_conversation_messages(
     )
 
 
-@router.post("", response_model=ConversationResponse)
+@router.post("", response_model=ConversationCreateResponse)
 async def create_conversation(
     request: CreateConversationRequest,
     http: Request,
-) -> ConversationResponse:
+) -> ConversationCreateResponse:
     """创建一个空会话。
 
     这里只创建 conversation_threads：
@@ -153,7 +162,7 @@ async def create_conversation(
     except Exception as exc:
         raise map_exception_to_http_error(exc) from exc
 
-    return _thread_to_response(thread)
+    return ConversationCreateResponse(data=_thread_to_response(thread))
 
 
 def _thread_to_response(thread: ConversationThread) -> ConversationResponse:

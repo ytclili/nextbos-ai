@@ -102,15 +102,20 @@ def test_create_conversation_endpoint_returns_new_thread(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json() == {
-        "thread_id": "thread-created",
-        "user_id": "user-1",
-        "title": "测试会话",
-        "status": "active",
-        "message_count": 0,
-        "last_message_at": None,
-        "metadata": {"kind": "manual"},
-        "created_at": "2026-08-25T12:00:00Z",
-        "updated_at": "2026-08-25T12:00:00Z",
+        "code": 200,
+        "status": "success",
+        "message": "success",
+        "data": {
+            "thread_id": "thread-created",
+            "user_id": "user-1",
+            "title": "测试会话",
+            "status": "active",
+            "message_count": 0,
+            "last_message_at": None,
+            "metadata": {"kind": "manual"},
+            "created_at": "2026-08-25T12:00:00Z",
+            "updated_at": "2026-08-25T12:00:00Z",
+        },
     }
     assert calls == [
         ("init", "session-factory"),
@@ -159,7 +164,7 @@ def test_create_conversation_endpoint_defaults_title(monkeypatch) -> None:
     )
 
     assert response.status_code == 200
-    assert response.json()["title"] == "新会话"
+    assert response.json()["data"]["title"] == "新会话"
     assert calls == [
         {
             "user_id": "user-1",

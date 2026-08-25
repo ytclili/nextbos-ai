@@ -46,13 +46,21 @@ class ChatResponseItem(BaseModel):
     )
 
 
-class ChatResponse(BaseModel):
-    """chat 接口返回给前端的统一结构。"""
+class ChatResponseData(BaseModel):
+    """chat 接口 data 字段里的业务数据。"""
 
-    status: Literal["success"] = "success"
     thread_id: str
     trace_id: str | None = Field(default=None, description="本次请求的 OpenTelemetry trace_id")
     items: list[ChatResponseItem]
+
+
+class ChatResponse(BaseModel):
+    """chat 接口返回给前端的统一结构。"""
+
+    code: int = 200
+    status: Literal["success"] = "success"
+    message: str = "success"
+    data: ChatResponseData
 
 
 @router.post("", response_model=ChatResponse)
@@ -77,14 +85,16 @@ async def chat(request: ChatRequest, http: Request) -> ChatResponse:
         raise map_exception_to_http_error(exc) from exc
 
     return ChatResponse(
-        thread_id=request.thread_id,
-        trace_id=trace_id,
-        items=[
-            ChatResponseItem(
-                type="text",
-                content=content,
-            )
-        ],
+        data=ChatResponseData(
+            thread_id=request.thread_id,
+            trace_id=trace_id,
+            items=[
+                ChatResponseItem(
+                    type="text",
+                    content=content,
+                )
+            ],
+        )
     )
 
 
