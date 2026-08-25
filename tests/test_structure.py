@@ -11,6 +11,7 @@ def test_graph_is_compiled():
 def test_builtin_tool_registry_contains_builtin_tools():
     assert get_builtin_tool_names() == [
         "get_dashboard",
+        "get_metric_details",
         "health_check",
         "manage_memory",
         "search_memory",
