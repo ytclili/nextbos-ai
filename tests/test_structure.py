@@ -12,6 +12,7 @@ def test_builtin_tool_registry_contains_builtin_tools():
     assert get_builtin_tool_names() == [
         "get_dashboard",
         "get_metric_details",
+        "get_top_pending_customer",
         "health_check",
         "manage_memory",
         "search_memory",
