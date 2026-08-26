@@ -1,5 +1,6 @@
 from app.core.config import Settings
 from app.tools.business import dashboard as dashboard_module
+from app.tools.business.auth import use_core_internal_token
 from app.tools.registry import get_builtin_tool_names
 
 
@@ -122,6 +123,31 @@ async def test_get_dashboard_keeps_existing_bearer_token(monkeypatch) -> None:
     await dashboard_module.get_dashboard.ainvoke({"period": "yesterday"})
 
     assert FakeAsyncClient.requests[0]["headers"] == {"Authorization": "Bearer existing-token"}
+
+
+async def test_get_dashboard_prefers_runtime_token_override(monkeypatch) -> None:
+    """有本次运行 token 时，业务工具应该优先使用它而不是 env token。"""
+
+    FakeAsyncClient.requests = []
+    FakeAsyncClient.response = FakeResponse({"data": {"received": 100, "pending": 20}})
+
+    monkeypatch.setattr(dashboard_module.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(
+        dashboard_module,
+        "get_settings",
+        lambda: Settings(
+            core_internal_base_url="http://core.internal",
+            core_internal_token="env-token",
+        ),
+    )
+
+    token = use_core_internal_token("resume-token")
+    try:
+        await dashboard_module.get_dashboard.ainvoke({"period": "yesterday"})
+    finally:
+        token.reset()
+
+    assert FakeAsyncClient.requests[0]["headers"] == {"Authorization": "Bearer resume-token"}
 
 
 def test_builtin_tool_registry_contains_dashboard_tool() -> None:

@@ -7,7 +7,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.options import ChatModelOptions
-from app.agent.runtime import GraphStreamEvent, run_graph, stream_graph
+from app.agent.runtime import GraphStreamEvent, run_graph, stream_graph, stream_graph_resume
 from app.conversation.repository import ConversationRepository
 from app.conversation.summary import extract_running_summary
 from app.core.config import Settings
@@ -37,6 +37,7 @@ class AgentService:
         thread_id: str,
         user_id: str,
         message: str,
+        token: str | None = None,
         model_options: ChatModelOptions | None = None,
         trace_id: str | None = None,
     ) -> str:
@@ -66,6 +67,7 @@ class AgentService:
             thread_id=thread_id,
             user_id=user_id,
             message=message,
+            token=token,
             model_options=model_options,
             session_factory=self.session_factory,
             settings=self.settings,
@@ -96,6 +98,7 @@ class AgentService:
         thread_id: str,
         user_id: str,
         message: str,
+        token: str | None = None,
         model_options: ChatModelOptions | None = None,
         trace_id: str | None = None,
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
@@ -131,12 +134,14 @@ class AgentService:
 
         accumulated_tokens: list[str] = []
         final_state: dict[str, Any] = {}
+        interrupted = False
 
         async for event in stream_graph(
             self.checkpointer,
             thread_id=thread_id,
             user_id=user_id,
             message=message,
+            token=token,
             model_options=model_options,
             session_factory=self.session_factory,
             settings=self.settings,
@@ -149,18 +154,23 @@ class AgentService:
                     yield ("token", {"type": "text", "content": token})
             elif event.mode == "updates":
                 for tool_event in _extract_tool_events(event):
+                    if _is_interrupt_event(tool_event):
+                        interrupted = True
                     yield tool_event
             elif event.mode == "final_state":
                 final_state = dict(event.data or {})
 
-        content = _extract_final_content(final_state) or "".join(accumulated_tokens)
-        await self._persist_assistant_result(
-            thread_id=thread_id,
-            user_id=user_id,
-            content=content,
-            trace_id=trace_id,
-            result=final_state,
-        )
+        if interrupted:
+            content = ""
+        else:
+            content = _extract_final_content(final_state) or "".join(accumulated_tokens)
+            await self._persist_assistant_result(
+                thread_id=thread_id,
+                user_id=user_id,
+                content=content,
+                trace_id=trace_id,
+                result=final_state,
+            )
 
         logger.info(
             "agent.chat.stream.completed thread_id=%s user_id=%s output_length=%s",
@@ -168,7 +178,76 @@ class AgentService:
             user_id,
             len(content),
         )
-        yield ("done", {"content": content})
+        yield (
+            "done",
+            {"content": content, "status": "interrupted"} if interrupted else {"content": content},
+        )
+
+    async def stream_resume_chat(
+        self,
+        *,
+        thread_id: str,
+        user_id: str,
+        resume: dict[str, Any],
+        model_options: ChatModelOptions | None = None,
+        trace_id: str | None = None,
+    ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+        """从 LangGraph interrupt checkpoint 恢复一次流式 chat。"""
+
+        model_options = model_options or ChatModelOptions()
+        yield (
+            "start",
+            {
+                "code": 200,
+                "status": "success",
+                "thread_id": thread_id,
+                "trace_id": trace_id,
+            },
+        )
+
+        accumulated_tokens: list[str] = []
+        final_state: dict[str, Any] = {}
+        interrupted = False
+
+        async for event in stream_graph_resume(
+            self.checkpointer,
+            thread_id=thread_id,
+            user_id=user_id,
+            resume=resume,
+            model_options=model_options,
+            session_factory=self.session_factory,
+            settings=self.settings,
+            memory_store=self.memory_store,
+        ):
+            if event.mode == "messages":
+                token = _extract_token(event)
+                if token:
+                    accumulated_tokens.append(token)
+                    yield ("token", {"type": "text", "content": token})
+            elif event.mode == "updates":
+                for tool_event in _extract_tool_events(event):
+                    if _is_interrupt_event(tool_event):
+                        interrupted = True
+                    yield tool_event
+            elif event.mode == "final_state":
+                final_state = dict(event.data or {})
+
+        if interrupted:
+            content = ""
+        else:
+            content = _extract_final_content(final_state) or "".join(accumulated_tokens)
+            await self._persist_assistant_result(
+                thread_id=thread_id,
+                user_id=user_id,
+                content=content,
+                trace_id=trace_id,
+                result=final_state,
+            )
+
+        yield (
+            "done",
+            {"content": content, "status": "interrupted"} if interrupted else {"content": content},
+        )
 
     async def _append_user_message(
         self,
@@ -241,11 +320,33 @@ def _extract_tool_events(event: GraphStreamEvent) -> list[tuple[str, dict[str, A
         return []
 
     events: list[tuple[str, dict[str, Any]]] = []
+    events.extend(_interrupt_events(event.data))
     for node_name, update in event.data.items():
         if node_name == "respond":
             events.extend(_tool_start_events(update))
         elif node_name == "tools":
             events.extend(_tool_result_events(update))
+    return events
+
+
+def _interrupt_events(update: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """从 LangGraph __interrupt__ update 中提取前端中断事件。"""
+
+    interrupts = update.get("__interrupt__") or []
+    if not isinstance(interrupts, (list, tuple)):
+        interrupts = [interrupts]
+
+    events: list[tuple[str, dict[str, Any]]] = []
+    for interrupt in interrupts:
+        value = getattr(interrupt, "value", None)
+        if not isinstance(value, dict):
+            continue
+
+        event_type = str(value.get("type") or "interrupt")
+        data = dict(value)
+        if interrupt_id := getattr(interrupt, "id", None):
+            data["interrupt_id"] = str(interrupt_id)
+        events.append((event_type, data))
     return events
 
 
@@ -286,6 +387,7 @@ def _tool_result_events(update: Any) -> list[tuple[str, dict[str, Any]]]:
         tool_call_id = str(message.tool_call_id or "")
         status = str(getattr(message, "status", "success") or "success")
         if status == "error":
+            message_text = _message_content_to_text(message.content)
             events.append(
                 (
                     "tool_error",
@@ -293,7 +395,7 @@ def _tool_result_events(update: Any) -> list[tuple[str, dict[str, Any]]]:
                         "name": name,
                         "tool_call_id": tool_call_id,
                         "status": status,
-                        "message": _message_content_to_text(message.content),
+                        "message": message_text,
                     },
                 )
             )
@@ -321,6 +423,12 @@ def _update_messages(update: Any) -> list[Any]:
     if isinstance(messages, list):
         return messages
     return [messages]
+
+
+def _is_interrupt_event(event: tuple[str, dict[str, Any]]) -> bool:
+    """判断前端事件是否代表 LangGraph 暂停。"""
+
+    return event[0] == "auth_required" and event[1].get("status") == "interrupted"
 
 
 def _is_frontend_token_event(event: GraphStreamEvent) -> bool:

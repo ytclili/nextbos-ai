@@ -6,6 +6,7 @@ import httpx
 from langchain_core.tools import tool
 
 from app.core.config import get_settings
+from app.tools.business.auth import core_internal_headers
 
 logger = logging.getLogger(__name__)
 
@@ -21,20 +22,14 @@ async def get_dashboard(
     path = f"/api/ai-tools/dashboard?{query}"
     url = f"{settings.core_internal_base_url.rstrip('/')}{path}"
 
-    # 第一版只使用 mock token 透传给核心业务系统。
-    # 后续如果核心系统改成 HMAC 或其它内部鉴权，只需要替换这里的 headers。
-    headers = {}
-    if settings.core_internal_token:
-        token = settings.core_internal_token.strip()
-        headers["Authorization"] = (
-            token if token.lower().startswith("bearer ") else f"Bearer {token}"
-        )
+    # 优先使用本次 LangGraph 运行上下文里的 token；没有时回退 env token。
+    headers = core_internal_headers(settings)
 
     logger.info(
         "business.tool.get_dashboard.request url=%s period=%s token_set=%s",
         url,
         period,
-        bool(settings.core_internal_token),
+        bool(headers.get("Authorization")),
     )
 
     async with httpx.AsyncClient(timeout=settings.core_internal_timeout_seconds) as client:

@@ -1,5 +1,6 @@
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
+from langgraph.types import Command
 
 from app.agent import runtime as runtime_module
 from app.agent.options import ChatModelOptions
@@ -108,6 +109,7 @@ async def test_run_graph_passes_memory_store_and_langgraph_user_id(monkeypatch) 
         thread_id="thread-1",
         user_id="user-1",
         message="今天吃什么？",
+        token="chat-token",
         model_options=model_options,
         session_factory=FakeSessionFactory(),
         settings=Settings(
@@ -324,6 +326,7 @@ async def test_stream_graph_uses_langgraph_astream_and_yields_final_state(monkey
             thread_id="thread-1",
             user_id="user-1",
             message="今天吃什么？",
+            token="stream-token",
             model_options=ChatModelOptions(),
             session_factory=FakeSessionFactory(),
             settings=Settings(),
@@ -350,3 +353,108 @@ async def test_stream_graph_uses_langgraph_astream_and_yields_final_state(monkey
             "langgraph_user_id": "user-1",
         }
     }
+
+
+@pytest.mark.asyncio
+async def test_stream_graph_resume_uses_langgraph_command_resume(monkeypatch) -> None:
+    """stream_graph_resume 应该用 Command(resume=...) 从 checkpoint 恢复。"""
+
+    captured = {}
+    checkpointer = FakeCheckpointer(checkpoint=object())
+    summarization_model = object()
+    resume_payload = {
+        "type": "auth_result",
+        "status": "failed",
+        "token": "resume-token",
+    }
+
+    class FakeAgentModelRuntime:
+        """测试用模型运行时，不访问真实数据库或大模型。"""
+
+        def __init__(self, *, config_resolver):
+            self.config_resolver = config_resolver
+
+        async def resolve_config(self, options):
+            return EffectiveModelConfig(
+                source="env_fallback",
+                provider="openai_compatible",
+                base_url="https://api.example.com/v1",
+                model_name="test-model",
+                params={},
+                credential=ProviderCredential(
+                    id=None,
+                    provider="openai_compatible",
+                    name="env",
+                    api_key="test-key",
+                ),
+                digest="digest",
+            )
+
+        def create_chat_model(self, config):
+            return summarization_model
+
+    class FakeStateSnapshot:
+        """测试用 LangGraph state snapshot。"""
+
+        values = {"messages": [AIMessage(content="请重新登录。")]}
+
+    class FakeRunnable:
+        async def astream(self, state, config, stream_mode):
+            captured["state"] = state
+            captured["config"] = config
+            captured["stream_mode"] = stream_mode
+            yield ("messages", ("chunk", {"langgraph_node": "final_respond"}))
+
+        async def aget_state(self, config):
+            return FakeStateSnapshot()
+
+    def fake_build_graph(
+        *,
+        checkpointer,
+        model_runtime,
+        store,
+        summarization_model,
+        summary_options,
+    ):
+        captured["checkpointer"] = checkpointer
+        captured["store"] = store
+        return FakeRunnable()
+
+    monkeypatch.setattr(runtime_module, "AgentModelRuntime", FakeAgentModelRuntime)
+    monkeypatch.setattr(runtime_module, "build_graph", fake_build_graph)
+
+    events = [
+        event
+        async for event in runtime_module.stream_graph_resume(
+            checkpointer,
+            thread_id="thread-1",
+            user_id="user-1",
+            resume=resume_payload,
+            model_options=ChatModelOptions(),
+            session_factory=FakeSessionFactory(),
+            settings=Settings(),
+            memory_store="memory-store",
+        )
+    ]
+
+    assert isinstance(captured["state"], Command)
+    assert captured["state"].resume == {
+        "type": "auth_result",
+        "status": "failed",
+    }
+    assert captured["config"] == {
+        "configurable": {
+            "thread_id": "thread-1",
+            "langgraph_user_id": "user-1",
+            "auth_resume": {
+                "type": "auth_result",
+                "status": "failed",
+            },
+        }
+    }
+    assert captured["stream_mode"] == ["messages", "updates"]
+    assert captured["store"] == "memory-store"
+    assert events[-1] == runtime_module.GraphStreamEvent(
+        mode="final_state",
+        data={"messages": [AIMessage(content="请重新登录。")]},
+    )

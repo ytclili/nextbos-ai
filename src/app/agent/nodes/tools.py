@@ -1,10 +1,13 @@
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from time import perf_counter
+from typing import Any
 
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.prebuilt import ToolNode
+from langgraph.types import interrupt
 
 from app.agent.state import AgentState
 from app.core.tracing import get_tracer
@@ -63,8 +66,13 @@ def create_tools_node() -> ToolsNode:
                     user_id,
                 )
 
+            auth_resume = _auth_resume_from_config(config)
+
             try:
-                result = await tool_node.ainvoke(state, config=config)
+                if _auth_resume_status(auth_resume) == "failed":
+                    result = _auth_resume_failed_result(tool_calls, auth_resume)
+                else:
+                    result = await tool_node.ainvoke(state, config=config)
             except Exception:
                 duration_ms = _duration_ms(started_at)
                 span.set_attribute("agent.tool.status", "error")
@@ -92,6 +100,11 @@ def create_tools_node() -> ToolsNode:
                         duration_ms,
                     )
                 raise
+
+            auth_payload = _auth_required_payload(result)
+            if auth_payload is not None:
+                resume = interrupt(auth_payload)
+                result = _tool_auth_resume_result(result, resume)
 
             duration_ms = _duration_ms(started_at)
             has_tool_error = _has_tool_error(result)
@@ -157,31 +170,138 @@ def _format_tool_error(exc: Exception) -> str:
     return f"工具执行失败：{type(exc).__name__}: {_short_text(str(exc))}"
 
 
-def _has_tool_error(result: dict) -> bool:
-    """判断 ToolNode 返回里是否包含失败的 ToolMessage。"""
+def _auth_required_payload(result: dict) -> dict[str, Any] | None:
+    """从工具结果里识别 401/403，并组装 LangGraph interrupt payload。"""
+
+    for message in _tool_messages(result):
+        status = getattr(message, "status", "success") or "success"
+        if status != "error":
+            continue
+
+        content = str(message.content)
+        if status_code := _extract_auth_status_code(content):
+            return {
+                "type": "auth_required",
+                "name": str(message.name or ""),
+                "tool_call_id": str(message.tool_call_id or ""),
+                "status": "interrupted",
+                "status_code": status_code,
+                "message": "登录已失效或没有权限，请重新登录后再试。",
+            }
+    return None
+
+
+def _tool_auth_resume_result(result: dict, resume: Any) -> dict:
+    """根据前端授权结果，把中断恢复成可继续进入 final_respond 的工具消息。"""
+
+    if _auth_resume_status(resume) == "failed":
+        reason = _auth_resume_reason(resume) or "用户取消登录或没有权限。"
+        return _replace_tool_auth_error(
+            result,
+            f"用户授权失败，无法继续查询业务数据。原因：{reason}",
+        )
+
+    return _replace_tool_auth_error(
+        result,
+        "用户已完成授权，但业务接口仍然返回无权限，请提示用户稍后重试或联系管理员。",
+    )
+
+
+def _auth_resume_failed_result(tool_calls: list[dict], resume: Any) -> dict:
+    """前端明确授权失败时，不再重复调用业务工具，直接返回工具失败消息。"""
+
+    reason = _auth_resume_reason(resume) or "用户取消登录或没有权限。"
+    return {
+        "messages": [
+            ToolMessage(
+                content=f"用户授权失败，无法继续查询业务数据。原因：{reason}",
+                tool_call_id=str(tool_call.get("id", "")),
+                name=str(tool_call.get("name", "")),
+                status="error",
+            )
+            for tool_call in tool_calls
+        ]
+    }
+
+
+def _replace_tool_auth_error(result: dict, content: str) -> dict:
+    """把原始 401/403 工具错误替换成适合模型生成用户回复的内容。"""
 
     messages = result.get("messages", []) if isinstance(result, dict) else []
     if not isinstance(messages, list):
         messages = [messages]
 
+    replaced_messages = []
+    for message in messages:
+        if (
+            isinstance(message, ToolMessage)
+            and (getattr(message, "status", "success") or "success") == "error"
+            and _extract_auth_status_code(str(message.content)) is not None
+        ):
+            replaced_messages.append(
+                ToolMessage(
+                    content=content,
+                    tool_call_id=str(message.tool_call_id or ""),
+                    name=str(message.name or ""),
+                    status="error",
+                )
+            )
+        else:
+            replaced_messages.append(message)
+
+    return {**result, "messages": replaced_messages}
+
+
+def _auth_resume_status(resume: Any) -> str:
+    """读取前端 resume payload 中的授权结果。"""
+
+    if isinstance(resume, dict):
+        return str(resume.get("status") or "")
+    return ""
+
+
+def _auth_resume_reason(resume: Any) -> str:
+    """读取前端 resume payload 中的失败原因。"""
+
+    if isinstance(resume, dict):
+        return str(resume.get("reason") or "")
+    return ""
+
+
+def _auth_resume_from_config(config: RunnableConfig | None) -> Any:
+    """从 LangGraph config 中读取前端 resume payload。"""
+
+    if not isinstance(config, dict):
+        return None
+    configurable = config.get("configurable")
+    if not isinstance(configurable, dict):
+        return None
+    return configurable.get("auth_resume")
+
+
+def _extract_auth_status_code(message: str) -> int | None:
+    """从工具错误文本中识别鉴权失败状态码。"""
+
+    match = re.search(r"\b(401|403)\b", message)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _has_tool_error(result: dict) -> bool:
+    """判断 ToolNode 返回里是否包含失败的 ToolMessage。"""
+
     return any(
         isinstance(message, ToolMessage)
         and (getattr(message, "status", "success") or "success") == "error"
-        for message in messages
+        for message in _tool_messages(result)
     )
 
 
 def _log_tool_result_messages(result: dict, *, thread_id: str, user_id: str) -> None:
     """把 ToolNode 返回的 ToolMessage 摘要打印到控制台日志。"""
 
-    messages = result.get("messages", []) if isinstance(result, dict) else []
-    if not isinstance(messages, list):
-        messages = [messages]
-
-    for message in messages:
-        if not isinstance(message, ToolMessage):
-            continue
-
+    for message in _tool_messages(result):
         logger.info(
             (
                 "agent.tool.result tool_name=%s tool_call_id=%s status=%s "
@@ -194,6 +314,16 @@ def _log_tool_result_messages(result: dict, *, thread_id: str, user_id: str) -> 
             user_id,
             _short_text(str(message.content)),
         )
+
+
+def _tool_messages(result: dict) -> list[ToolMessage]:
+    """从 ToolNode 返回结果里提取 ToolMessage。"""
+
+    messages = result.get("messages", []) if isinstance(result, dict) else []
+    if not isinstance(messages, list):
+        messages = [messages]
+
+    return [message for message in messages if isinstance(message, ToolMessage)]
 
 
 def _short_text(value: str, *, max_length: int = 2000) -> str:

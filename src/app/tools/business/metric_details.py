@@ -6,6 +6,7 @@ import httpx
 from langchain_core.tools import tool
 
 from app.core.config import get_settings
+from app.tools.business.auth import core_internal_headers
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +33,7 @@ async def get_metric_details(
 
     path = f"/api/ai-tools/metric-details?{urlencode(query)}"
     url = f"{settings.core_internal_base_url.rstrip('/')}{path}"
-    headers = {}
-    if settings.core_internal_token:
-        token = settings.core_internal_token.strip()
-        headers["Authorization"] = (
-            token if token.lower().startswith("bearer ") else f"Bearer {token}"
-        )
+    headers = core_internal_headers(settings)
 
     logger.info(
         (

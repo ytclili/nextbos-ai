@@ -27,11 +27,32 @@ class ChatRequest(BaseModel):
     thread_id: str = Field(min_length=1, max_length=128)
     user_id: str = Field(min_length=1, max_length=128)
     message: str = Field(min_length=1, max_length=20_000)
+    token: str | None = Field(default=None, min_length=1, max_length=4096)
 
     # 可选：选择数据库里已经登记过的模型 alias。
     model_alias: str | None = Field(default=None, min_length=1, max_length=128)
 
     # 可选：本次请求覆盖模型生成参数。
+    model_params: ChatModelParams | None = None
+
+
+class ChatResumePayload(BaseModel):
+    """前端完成 HITL 动作后传回来的 resume 数据。"""
+
+    type: Literal["auth_result"]
+    status: Literal["success", "failed"]
+    token: str | None = Field(default=None, min_length=1, max_length=4096)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class ChatResumeRequest(BaseModel):
+    thread_id: str = Field(min_length=1, max_length=128)
+    user_id: str = Field(min_length=1, max_length=128)
+    resume: ChatResumePayload
+
+    # resume 时通常沿用 checkpoint 里的上下文；这里保留模型覆盖入口，
+    # 避免前端在特殊调试场景下无法指定模型参数。
+    model_alias: str | None = Field(default=None, min_length=1, max_length=128)
     model_params: ChatModelParams | None = None
 
 
@@ -78,6 +99,7 @@ async def chat(request: ChatRequest, http: Request) -> ChatResponse:
             thread_id=request.thread_id,
             user_id=request.user_id,
             message=request.message,
+            token=request.token,
             model_options=_to_model_options(request),
             trace_id=trace_id,
         )
@@ -123,6 +145,59 @@ async def chat_stream(request: ChatRequest, http: Request) -> StreamingResponse:
                 thread_id=request.thread_id,
                 user_id=request.user_id,
                 message=request.message,
+                token=request.token,
+                model_options=_to_model_options(request),
+                trace_id=trace_id,
+            ):
+                yield encode_sse_event(event, data)
+        except Exception as exc:
+            http_error = map_exception_to_http_error(exc)
+            detail = http_error.detail
+            if isinstance(detail, dict):
+                code = str(detail.get("code", "stream_error"))
+                message = str(detail.get("message", "流式输出失败，请稍后重试。"))
+            else:
+                code = "stream_error"
+                message = str(detail)
+            yield encode_sse_event(
+                "error",
+                {
+                    "code": code,
+                    "message": message,
+                },
+            )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/resume/stream")
+async def chat_resume_stream(
+    request: ChatResumeRequest,
+    http: Request,
+) -> StreamingResponse:
+    """从 LangGraph interrupt 恢复流式 chat。"""
+
+    trace_id = _current_trace_id()
+    service = AgentService(
+        http.app.state.checkpointer,
+        http.app.state.session_factory,
+        http.app.state.settings,
+        memory_store=http.app.state.memory_store,
+    )
+
+    async def event_stream() -> AsyncIterator[str]:
+        try:
+            async for event, data in service.stream_resume_chat(
+                thread_id=request.thread_id,
+                user_id=request.user_id,
+                resume=request.resume.model_dump(exclude_none=True),
                 model_options=_to_model_options(request),
                 trace_id=trace_id,
             ):

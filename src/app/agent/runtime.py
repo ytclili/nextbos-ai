@@ -5,6 +5,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.types import Command
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.graph import build_graph
@@ -17,6 +18,7 @@ from app.core.config import Settings
 from app.core.tracing import get_tracer
 from app.llm.config_resolver import ModelConfigResolver
 from app.persistence.postgres.llm_model_repository import PostgresLLMModelRepository
+from app.tools.business.auth import use_core_internal_token
 
 tracer = get_tracer(__name__)
 
@@ -49,6 +51,7 @@ async def run_graph(
     user_id: str,
     message: str,
     model_options: ChatModelOptions,
+    token: str | None = None,
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings,
     memory_store=None,
@@ -75,6 +78,7 @@ async def run_graph(
             thread_id=thread_id,
             user_id=user_id,
             message=message,
+            token=token,
             model_options=model_options,
             session_factory=session_factory,
             settings=settings,
@@ -84,10 +88,14 @@ async def run_graph(
                 "agent.restore.messages.count",
                 len(prepared.input_state["messages"]),
             )
-            return await prepared.runnable.ainvoke(
-                prepared.input_state,
-                config=prepared.graph_config,
-            )
+            token_override = use_core_internal_token(token)
+            try:
+                return await prepared.runnable.ainvoke(
+                    prepared.input_state,
+                    config=prepared.graph_config,
+                )
+            finally:
+                token_override.reset()
 
 
 async def stream_graph(
@@ -97,6 +105,7 @@ async def stream_graph(
     user_id: str,
     message: str,
     model_options: ChatModelOptions,
+    token: str | None = None,
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings,
     memory_store=None,
@@ -121,6 +130,7 @@ async def stream_graph(
             thread_id=thread_id,
             user_id=user_id,
             message=message,
+            token=token,
             model_options=model_options,
             session_factory=session_factory,
             settings=settings,
@@ -131,18 +141,70 @@ async def stream_graph(
                 len(prepared.input_state["messages"]),
             )
 
-            async for item in prepared.runnable.astream(
-                prepared.input_state,
-                config=prepared.graph_config,
-                stream_mode=["messages", "updates"],
-            ):
-                yield _to_graph_stream_event(item)
+            token_override = use_core_internal_token(token)
+            try:
+                async for item in prepared.runnable.astream(
+                    prepared.input_state,
+                    config=prepared.graph_config,
+                    stream_mode=["messages", "updates"],
+                ):
+                    yield _to_graph_stream_event(item)
 
-            snapshot = await prepared.runnable.aget_state(prepared.graph_config)
-            yield GraphStreamEvent(
-                mode="final_state",
-                data=dict(getattr(snapshot, "values", {}) or {}),
-            )
+                snapshot = await prepared.runnable.aget_state(prepared.graph_config)
+                yield GraphStreamEvent(
+                    mode="final_state",
+                    data=dict(getattr(snapshot, "values", {}) or {}),
+                )
+            finally:
+                token_override.reset()
+
+
+async def stream_graph_resume(
+    checkpointer: BaseCheckpointSaver,
+    *,
+    thread_id: str,
+    user_id: str,
+    resume: dict[str, Any],
+    model_options: ChatModelOptions,
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    memory_store=None,
+) -> AsyncIterator[GraphStreamEvent]:
+    """从 LangGraph interrupt checkpoint 恢复一次流式运行。"""
+
+    with tracer.start_as_current_span("agent.run.stream.resume") as span:
+        span.set_attribute("agent.thread_id", thread_id)
+        span.set_attribute("agent.user_id", user_id)
+
+        async with _prepare_graph_run(
+            checkpointer,
+            thread_id=thread_id,
+            user_id=user_id,
+            message="",
+            model_options=model_options,
+            session_factory=session_factory,
+            settings=settings,
+            memory_store=memory_store,
+            resume=True,
+        ) as prepared:
+            graph_config = _with_resume_config(prepared.graph_config, resume)
+            sanitized_resume = _resume_without_token(resume)
+            token_override = use_core_internal_token(_resume_token(resume))
+            try:
+                async for item in prepared.runnable.astream(
+                    Command(resume=sanitized_resume),
+                    config=graph_config,
+                    stream_mode=["messages", "updates"],
+                ):
+                    yield _to_graph_stream_event(item)
+
+                snapshot = await prepared.runnable.aget_state(graph_config)
+                yield GraphStreamEvent(
+                    mode="final_state",
+                    data=dict(getattr(snapshot, "values", {}) or {}),
+                )
+            finally:
+                token_override.reset()
 
 
 @asynccontextmanager
@@ -153,9 +215,11 @@ async def _prepare_graph_run(
     user_id: str,
     message: str,
     model_options: ChatModelOptions,
+    token: str | None = None,
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings,
     memory_store=None,
+    resume: bool = False,
 ) -> AsyncIterator[PreparedGraphRun]:
     """准备 LangGraph 运行所需的公共上下文。
 
@@ -181,7 +245,9 @@ async def _prepare_graph_run(
         model_config = await model_runtime.resolve_config(model_options)
         summarization_model = model_runtime.create_chat_model(model_config)
 
-        if checkpoint_exists:
+        if resume:
+            messages = []
+        elif checkpoint_exists:
             messages = [HumanMessage(content=message)]
         else:
             context_loader = ConversationContextLoader(
@@ -220,6 +286,28 @@ def _to_graph_stream_event(item: Any) -> GraphStreamEvent:
     if isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str):
         return GraphStreamEvent(mode=item[0], data=item[1])
     return GraphStreamEvent(mode="updates", data=item)
+
+
+def _with_resume_config(graph_config: dict[str, Any], resume: dict[str, Any]) -> dict[str, Any]:
+    """把前端 resume 数据放进 LangGraph config，供节点读取。"""
+
+    configurable = dict(graph_config.get("configurable") or {})
+    configurable["auth_resume"] = _resume_without_token(resume)
+
+    return {**graph_config, "configurable": configurable}
+
+
+def _resume_without_token(resume: dict[str, Any]) -> dict[str, Any]:
+    """移除 resume payload 里的 token，避免写入 LangGraph checkpoint/config。"""
+
+    return {key: value for key, value in resume.items() if key != "token"}
+
+
+def _resume_token(resume: dict[str, Any]) -> str | None:
+    """读取前端 resume payload 里的 token。"""
+
+    token = resume.get("token")
+    return token.strip() if isinstance(token, str) and token.strip() else None
 
 
 async def _checkpoint_exists(checkpointer: BaseCheckpointSaver, config: dict) -> bool:

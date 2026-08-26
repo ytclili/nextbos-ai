@@ -6,6 +6,7 @@ import httpx
 from langchain_core.tools import tool
 
 from app.core.config import get_settings
+from app.tools.business.auth import core_internal_headers
 
 logger = logging.getLogger(__name__)
 
@@ -21,14 +22,8 @@ async def get_top_pending_customer(
     path = f"/api/ai-tools/customers/top-pending?{query}"
     url = f"{settings.core_internal_base_url.rstrip('/')}{path}"
 
-    # 第一版只使用 mock token 透传给核心业务系统。
-    # 后续如果核心系统改成 HMAC 或其它内部鉴权，只需要替换这里的 headers。
-    headers = {}
-    if settings.core_internal_token:
-        token = settings.core_internal_token.strip()
-        headers["Authorization"] = (
-            token if token.lower().startswith("bearer ") else f"Bearer {token}"
-        )
+    # 优先使用本次 LangGraph 运行上下文里的 token；没有时回退 env token。
+    headers = core_internal_headers(settings)
 
     logger.info(
         (

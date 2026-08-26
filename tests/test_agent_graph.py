@@ -1,13 +1,18 @@
 import logging
 
+import httpx
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.store.memory import InMemoryStore
+from langgraph.types import Command
 
 from app.agent.graph import build_graph
 from app.agent.nodes import tools as tools_module
+from app.core.config import Settings
 from app.llm.models import EffectiveModelConfig, ProviderCredential
+from app.tools.business.auth import core_internal_headers, use_core_internal_token
 
 
 class FakeAgentModelRuntime:
@@ -83,6 +88,34 @@ class ToolCallingChatModel(FakeChatModel):
                 ],
             )
         return AIMessage(content="工具系统正常")
+
+
+class TokenEchoToolAgentModelRuntime(FakeAgentModelRuntime):
+    """先请求 token_echo 工具，再基于工具结果回复。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.chat_model = TokenEchoToolChatModel()
+
+
+class TokenEchoToolChatModel(FakeChatModel):
+    """模拟模型调用一个会读取业务 token 的工具。"""
+
+    async def ainvoke(self, messages):
+        self.calls.append(messages)
+        if len(self.calls) == 1:
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "token_echo_tool",
+                        "args": {},
+                        "id": "call-token-echo-tool",
+                    }
+                ],
+            )
+        tool_message = next(message for message in messages if isinstance(message, ToolMessage))
+        return AIMessage(content=str(tool_message.content))
 
 
 class MemoryManagingAgentModelRuntime(FakeAgentModelRuntime):
@@ -221,6 +254,37 @@ class FailingToolChatModel(FakeChatModel):
         return AIMessage(content="业务接口暂时不可用，请稍后再试。")
 
 
+class AuthFailingToolAgentModelRuntime(FakeAgentModelRuntime):
+    """先请求鉴权失败工具，再基于授权失败 ToolMessage 返回最终回复。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.chat_model = AuthFailingToolChatModel()
+
+
+class AuthFailingToolChatModel(FakeChatModel):
+    """模拟模型调用一个需要用户授权的工具。"""
+
+    async def ainvoke(self, messages):
+        self.calls.append(messages)
+        if len(self.calls) == 1:
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "auth_failing_tool",
+                        "args": {},
+                        "id": "call-auth-failing-tool",
+                    }
+                ],
+            )
+        assert any(
+            isinstance(message, ToolMessage) and "用户授权失败" in str(message.content)
+            for message in messages
+        )
+        return AIMessage(content="暂时无法查询数据，请重新登录后再试。")
+
+
 @pytest.mark.asyncio
 async def test_graph_runs_start_to_respond_to_end_with_model_runtime() -> None:
     """graph 应该执行 respond 节点，并把模型回复追加到 messages。"""
@@ -277,6 +341,43 @@ async def test_graph_executes_tool_call_and_logs_tool_lifecycle(caplog) -> None:
 
 
 @pytest.mark.asyncio
+async def test_graph_tools_node_passes_config_token_to_business_tool(monkeypatch) -> None:
+    """tools 节点应该把 LangGraph config 里的 token 注入给业务工具。"""
+
+    @tool
+    async def token_echo_tool() -> str:
+        """测试用 token 回显工具。"""
+
+        headers = core_internal_headers(Settings(core_internal_token="env-token"))
+        return headers["Authorization"]
+
+    monkeypatch.setattr(tools_module, "get_builtin_tools", lambda: [token_echo_tool])
+    model_runtime = TokenEchoToolAgentModelRuntime()
+    graph = build_graph(model_runtime=model_runtime)
+
+    token = use_core_internal_token("runtime-token")
+    try:
+        result = await graph.ainvoke(
+            {
+                "messages": [HumanMessage(content="检查 token")],
+                "model_options": None,
+                "thread_id": "thread-token-test",
+                "user_id": "user-1",
+            },
+            config={
+                "configurable": {
+                    "thread_id": "thread-token-test",
+                    "langgraph_user_id": "user-1",
+                }
+            },
+        )
+    finally:
+        token.reset()
+
+    assert result["messages"][-1].content == "Bearer runtime-token"
+
+
+@pytest.mark.asyncio
 async def test_graph_continues_when_tool_returns_error_message(monkeypatch) -> None:
     """工具执行失败时，graph 应该保留错误 ToolMessage，并继续生成最终回复。"""
 
@@ -313,6 +414,82 @@ async def test_graph_continues_when_tool_returns_error_message(monkeypatch) -> N
     assert tool_messages[0].status == "error"
     assert "工具执行失败：RuntimeError: 业务接口不可用" in tool_messages[0].content
     assert result["messages"][-1].content == "业务接口暂时不可用，请稍后再试。"
+
+
+@pytest.mark.asyncio
+async def test_graph_interrupts_when_tool_returns_auth_error_and_resumes_failed(
+    monkeypatch,
+) -> None:
+    """工具返回 401/403 时，graph 应该 interrupt，并能按授权失败结果恢复。"""
+
+    @tool
+    async def auth_failing_tool() -> str:
+        """测试用鉴权失败工具。"""
+
+        tool_call_count["count"] += 1
+        request = httpx.Request("GET", "http://127.0.0.1:3000/api/ai-tools/dashboard")
+        response = httpx.Response(401, request=request)
+        raise httpx.HTTPStatusError("401 Unauthorized", request=request, response=response)
+
+    tool_call_count = {"count": 0}
+    monkeypatch.setattr(tools_module, "get_builtin_tools", lambda: [auth_failing_tool])
+    model_runtime = AuthFailingToolAgentModelRuntime()
+    graph = build_graph(model_runtime=model_runtime, checkpointer=MemorySaver())
+    config = {
+        "configurable": {
+            "thread_id": "thread-auth-interrupt-test",
+            "langgraph_user_id": "user-1",
+        }
+    }
+
+    first_events = [
+        event
+        async for event in graph.astream(
+            {
+                "messages": [HumanMessage(content="查询经营看板")],
+                "model_options": None,
+                "thread_id": "thread-auth-interrupt-test",
+                "user_id": "user-1",
+            },
+            config=config,
+            stream_mode=["updates"],
+        )
+    ]
+
+    interrupt_event = first_events[-1][1]["__interrupt__"][0]
+    assert interrupt_event.value["type"] == "auth_required"
+    assert interrupt_event.value["name"] == "auth_failing_tool"
+    assert interrupt_event.value["tool_call_id"] == "call-auth-failing-tool"
+    assert interrupt_event.value["status_code"] == 401
+
+    resumed_events = [
+        event
+        async for event in graph.astream(
+            Command(
+                resume={
+                    "type": "auth_result",
+                    "status": "failed",
+                    "reason": "用户取消登录",
+                }
+            ),
+            config={
+                "configurable": {
+                    **config["configurable"],
+                    "auth_resume": {
+                        "type": "auth_result",
+                        "status": "failed",
+                        "reason": "用户取消登录",
+                    },
+                }
+            },
+            stream_mode=["updates"],
+        )
+    ]
+    final_update = resumed_events[-1][1]["final_respond"]
+
+    assert len(model_runtime.chat_model.calls) == 2
+    assert tool_call_count["count"] == 1
+    assert final_update["messages"][-1].content == "暂时无法查询数据，请重新登录后再试。"
 
 
 @pytest.mark.asyncio

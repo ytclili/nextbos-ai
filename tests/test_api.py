@@ -99,6 +99,7 @@ def test_chat_endpoint_passes_trace_id_to_agent_service(monkeypatch):
             "thread_id": "thread-1",
             "user_id": "user-1",
             "message": "今天吃什么？",
+            "token": "chat-token",
         },
     )
 
@@ -122,6 +123,7 @@ def test_chat_endpoint_passes_trace_id_to_agent_service(monkeypatch):
                 "thread_id": "thread-1",
                 "user_id": "user-1",
                 "message": "今天吃什么？",
+                "token": "chat-token",
                 "model_options": chat_route_module.ChatModelOptions(
                     model_alias=None,
                     model_params=None,
@@ -191,6 +193,7 @@ def test_chat_stream_endpoint_returns_sse_events(monkeypatch):
             "thread_id": "thread-1",
             "user_id": "user-1",
             "message": "今天吃什么？",
+            "token": "stream-token",
         },
     ) as response:
         body = response.read().decode()
@@ -225,6 +228,93 @@ def test_chat_stream_endpoint_returns_sse_events(monkeypatch):
                 "thread_id": "thread-1",
                 "user_id": "user-1",
                 "message": "今天吃什么？",
+                "token": "stream-token",
+                "model_options": chat_route_module.ChatModelOptions(
+                    model_alias=None,
+                    model_params=None,
+                ),
+                "trace_id": "trace-123",
+            },
+        ),
+    ]
+
+
+def test_chat_resume_stream_endpoint_returns_sse_events(monkeypatch):
+    """resume stream 接口应该把 AgentService 的恢复事件编码成 SSE。"""
+
+    calls = []
+
+    class FakeAgentService:
+        def __init__(self, checkpointer, session_factory, settings, memory_store=None):
+            calls.append(
+                (
+                    "init",
+                    {
+                        "checkpointer": checkpointer,
+                        "session_factory": session_factory,
+                        "settings": settings,
+                        "memory_store": memory_store,
+                    },
+                )
+            )
+
+        async def stream_resume_chat(self, **kwargs):
+            calls.append(("stream_resume_chat", kwargs))
+            yield ("start", {"code": 200, "status": "success", "thread_id": kwargs["thread_id"]})
+            yield ("token", {"type": "text", "content": "请重新登录后再查询。"})
+            yield ("done", {"content": "请重新登录后再查询。"})
+
+    settings = Settings()
+    monkeypatch.setattr(chat_route_module, "AgentService", FakeAgentService)
+    monkeypatch.setattr(chat_route_module, "_current_trace_id", lambda: "trace-123")
+
+    app.state.checkpointer = "checkpointer"
+    app.state.session_factory = "session-factory"
+    app.state.settings = settings
+    app.state.memory_store = "memory-store"
+
+    client = TestClient(app)
+    with client.stream(
+        "POST",
+        "/api/v1/chat/resume/stream",
+        json={
+            "thread_id": "thread-1",
+            "user_id": "user-1",
+            "resume": {
+                "type": "auth_result",
+                "status": "failed",
+                "token": "resume-token",
+                "reason": "用户取消登录",
+            },
+        },
+    ) as response:
+        body = response.read().decode()
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert 'event: token\ndata: {"type":"text","content":"请重新登录后再查询。"}' in body
+    assert 'event: done\ndata: {"content":"请重新登录后再查询。"}' in body
+    assert calls == [
+        (
+            "init",
+            {
+                "checkpointer": "checkpointer",
+                "session_factory": "session-factory",
+                "settings": settings,
+                "memory_store": "memory-store",
+            },
+        ),
+        (
+            "stream_resume_chat",
+            {
+                "thread_id": "thread-1",
+                "user_id": "user-1",
+                "resume": {
+                    "type": "auth_result",
+                    "status": "failed",
+                    "token": "resume-token",
+                    "reason": "用户取消登录",
+                },
                 "model_options": chat_route_module.ChatModelOptions(
                     model_alias=None,
                     model_params=None,
