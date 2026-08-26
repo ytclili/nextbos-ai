@@ -393,6 +393,41 @@ class ConversationRepository:
         async with self.session_factory() as session:
             return await session.scalar(statement)
 
+    async def bind_actor(self, *, from_actor_id: str, to_actor_id: str) -> dict[str, int]:
+        """把一个临时 actor 的会话归属迁移到另一个 actor。
+
+        典型场景：
+        - 登录前：visitor:xxx
+        - 登录后：user:yyy
+
+        这里只更新业务聊天记录表，不修改 LangGraph checkpoint。
+        """
+
+        now = datetime.now(UTC)
+        async with self.session_factory() as session:
+            async with session.begin():
+                threads_result = await session.execute(
+                    update(ConversationThread)
+                    .where(ConversationThread.user_id == from_actor_id)
+                    .values(user_id=to_actor_id, updated_at=now)
+                )
+                messages_result = await session.execute(
+                    update(ConversationMessage)
+                    .where(ConversationMessage.user_id == from_actor_id)
+                    .values(user_id=to_actor_id)
+                )
+                summaries_result = await session.execute(
+                    update(ConversationSummary)
+                    .where(ConversationSummary.user_id == from_actor_id)
+                    .values(user_id=to_actor_id, updated_at=now)
+                )
+
+        return {
+            "updated_threads": int(threads_result.rowcount or 0),
+            "updated_messages": int(messages_result.rowcount or 0),
+            "updated_summaries": int(summaries_result.rowcount or 0),
+        }
+
     @staticmethod
     async def _upsert_thread(
         session: AsyncSession,

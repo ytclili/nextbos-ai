@@ -108,6 +108,7 @@ def test_create_conversation_endpoint_returns_new_thread(monkeypatch) -> None:
         "data": {
             "thread_id": "thread-created",
             "user_id": "user-1",
+            "visitor_id": None,
             "title": "测试会话",
             "status": "active",
             "message_count": 0,
@@ -122,7 +123,7 @@ def test_create_conversation_endpoint_returns_new_thread(monkeypatch) -> None:
         (
             "create_thread",
             {
-                "user_id": "user-1",
+                "user_id": "user:user-1",
                 "title": "测试会话",
                 "metadata": {"kind": "manual"},
             },
@@ -167,7 +168,7 @@ def test_create_conversation_endpoint_defaults_title(monkeypatch) -> None:
     assert response.json()["data"]["title"] == "新会话"
     assert calls == [
         {
-            "user_id": "user-1",
+            "user_id": "user:user-1",
             "title": None,
             "metadata": {},
         }
@@ -227,6 +228,7 @@ def test_list_conversations_endpoint_returns_user_threads(monkeypatch) -> None:
             {
                 "thread_id": "thread-2",
                 "user_id": "user-1",
+                "visitor_id": None,
                 "title": "第二个会话",
                 "status": "active",
                 "message_count": 4,
@@ -238,6 +240,7 @@ def test_list_conversations_endpoint_returns_user_threads(monkeypatch) -> None:
             {
                 "thread_id": "thread-1",
                 "user_id": "user-1",
+                "visitor_id": None,
                 "title": "第一个会话",
                 "status": "active",
                 "message_count": 2,
@@ -252,9 +255,22 @@ def test_list_conversations_endpoint_returns_user_threads(monkeypatch) -> None:
     }
     assert calls == [
         ("init", "session-factory"),
-        ("list_threads", {"user_id": "user-1", "limit": 2}),
-        ("count_threads", {"user_id": "user-1"}),
+        ("list_threads", {"user_id": "user:user-1", "limit": 2}),
+        ("count_threads", {"user_id": "user:user-1"}),
     ]
+
+
+def test_list_conversations_endpoint_requires_user_or_visitor_identity() -> None:
+    """会话列表不能静默生成游客身份，缺少身份时应该返回 422。"""
+
+    client = TestClient(app)
+    response = client.get("/api/v1/conversations", params={"limit": 2})
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "code": "identity_required",
+        "message": "请求必须携带 user_id 或 visitor_id。",
+    }
 
 
 def test_list_conversation_messages_endpoint_returns_thread_history(monkeypatch) -> None:
@@ -316,6 +332,7 @@ def test_list_conversation_messages_endpoint_returns_thread_history(monkeypatch)
                 "message_id": "00000000-0000-0000-0000-000000000001",
                 "thread_id": "thread-1",
                 "user_id": "user-1",
+                "visitor_id": None,
                 "role": "user",
                 "type": "text",
                 "content": "今天吃什么？",
@@ -327,6 +344,7 @@ def test_list_conversation_messages_endpoint_returns_thread_history(monkeypatch)
                 "message_id": "00000000-0000-0000-0000-000000000002",
                 "thread_id": "thread-1",
                 "user_id": "user-1",
+                "visitor_id": None,
                 "role": "assistant",
                 "type": "text",
                 "content": "可以吃粤菜。",
@@ -340,6 +358,64 @@ def test_list_conversation_messages_endpoint_returns_thread_history(monkeypatch)
     }
     assert calls == [
         ("init", "session-factory"),
-        ("list_messages", {"thread_id": "thread-1", "user_id": "user-1", "limit": 2}),
-        ("count_messages", {"thread_id": "thread-1", "user_id": "user-1"}),
+        ("list_messages", {"thread_id": "thread-1", "user_id": "user:user-1", "limit": 2}),
+        ("count_messages", {"thread_id": "thread-1", "user_id": "user:user-1"}),
+    ]
+
+
+def test_bind_visitor_endpoint_moves_visitor_threads_to_user(monkeypatch) -> None:
+    """登录后绑定游客身份时，接口应该把 visitor actor 迁移到 user actor。"""
+
+    calls = []
+
+    class FakeConversationRepository:
+        def __init__(self, session_factory):
+            calls.append(("init", session_factory))
+
+        async def bind_actor(self, **kwargs):
+            calls.append(("bind_actor", kwargs))
+            return {
+                "updated_threads": 1,
+                "updated_messages": 2,
+                "updated_summaries": 0,
+            }
+
+    monkeypatch.setattr(
+        conversations_route_module,
+        "ConversationRepository",
+        FakeConversationRepository,
+    )
+    app.state.session_factory = "session-factory"
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/v1/conversations/bind-visitor",
+        json={
+            "visitor_id": "visitor-test",
+            "user_id": "user-1",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "code": 200,
+        "status": "success",
+        "message": "success",
+        "data": {
+            "visitor_id": "visitor-test",
+            "user_id": "user-1",
+            "updated_threads": 1,
+            "updated_messages": 2,
+            "updated_summaries": 0,
+        },
+    }
+    assert calls == [
+        ("init", "session-factory"),
+        (
+            "bind_actor",
+            {
+                "from_actor_id": "visitor:visitor-test",
+                "to_actor_id": "user:user-1",
+            },
+        ),
     ]

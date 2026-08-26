@@ -41,6 +41,8 @@ def test_chat_response_schema_contains_frontend_render_items():
     assert "message" in schema["properties"]
     assert "data" in schema["properties"]
     assert "thread_id" in data_schema["properties"]
+    assert "user_id" in data_schema["properties"]
+    assert "visitor_id" in data_schema["properties"]
     assert "trace_id" in data_schema["properties"]
     assert "items" in data_schema["properties"]
 
@@ -121,7 +123,7 @@ def test_chat_endpoint_passes_trace_id_to_agent_service(monkeypatch):
             "chat",
             {
                 "thread_id": "thread-1",
-                "user_id": "user-1",
+                "user_id": "user:user-1",
                 "message": "今天吃什么？",
                 "token": "chat-token",
                 "model_options": chat_route_module.ChatModelOptions(
@@ -132,6 +134,96 @@ def test_chat_endpoint_passes_trace_id_to_agent_service(monkeypatch):
             },
         ),
     ]
+
+
+def test_chat_endpoint_generates_visitor_and_thread_for_anonymous_user(monkeypatch):
+    """未登录且未带 visitor_id 时，chat 应该生成游客身份和会话 ID。"""
+
+    calls = []
+
+    class FakeAgentService:
+        def __init__(self, checkpointer, session_factory, settings, memory_store=None):
+            calls.append(("init", session_factory))
+
+        async def chat(self, **kwargs):
+            calls.append(("chat", kwargs))
+            return "你好呀"
+
+    monkeypatch.setattr(chat_route_module, "AgentService", FakeAgentService)
+    monkeypatch.setattr(chat_route_module, "_current_trace_id", lambda: "trace-visitor")
+    monkeypatch.setattr(chat_route_module, "new_visitor_id", lambda: "visitor-test")
+    monkeypatch.setattr(chat_route_module, "new_thread_id", lambda: "thread-generated")
+
+    app.state.checkpointer = "checkpointer"
+    app.state.session_factory = "session-factory"
+    app.state.settings = Settings()
+    app.state.memory_store = "memory-store"
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/v1/chat",
+        json={
+            "message": "你好",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["thread_id"] == "thread-generated"
+    assert response.json()["data"]["user_id"] is None
+    assert response.json()["data"]["visitor_id"] == "visitor-test"
+    assert calls[-1] == (
+        "chat",
+        {
+            "thread_id": "thread-generated",
+            "user_id": "visitor:visitor-test",
+            "message": "你好",
+            "token": None,
+            "model_options": chat_route_module.ChatModelOptions(
+                model_alias=None,
+                model_params=None,
+            ),
+            "trace_id": "trace-visitor",
+        },
+    )
+
+
+def test_chat_endpoint_prefers_user_identity_when_user_and_visitor_are_both_present(
+    monkeypatch,
+):
+    """同时带 user_id 和 visitor_id 时，chat 应该优先使用登录用户身份。"""
+
+    calls = []
+
+    class FakeAgentService:
+        def __init__(self, checkpointer, session_factory, settings, memory_store=None):
+            pass
+
+        async def chat(self, **kwargs):
+            calls.append(kwargs)
+            return "登录用户回复"
+
+    monkeypatch.setattr(chat_route_module, "AgentService", FakeAgentService)
+
+    app.state.checkpointer = "checkpointer"
+    app.state.session_factory = "session-factory"
+    app.state.settings = Settings()
+    app.state.memory_store = "memory-store"
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/v1/chat",
+        json={
+            "thread_id": "thread-1",
+            "user_id": "user-1",
+            "visitor_id": "visitor-test",
+            "message": "你好",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["user_id"] == "user-1"
+    assert response.json()["data"]["visitor_id"] is None
+    assert calls[0]["user_id"] == "user:user-1"
 
 
 def test_chat_stream_endpoint_returns_sse_events(monkeypatch):
@@ -226,7 +318,7 @@ def test_chat_stream_endpoint_returns_sse_events(monkeypatch):
             "stream_chat",
             {
                 "thread_id": "thread-1",
-                "user_id": "user-1",
+                "user_id": "user:user-1",
                 "message": "今天吃什么？",
                 "token": "stream-token",
                 "model_options": chat_route_module.ChatModelOptions(
@@ -237,6 +329,50 @@ def test_chat_stream_endpoint_returns_sse_events(monkeypatch):
             },
         ),
     ]
+
+
+def test_chat_stream_endpoint_returns_generated_visitor_id_for_anonymous_user(
+    monkeypatch,
+):
+    """匿名流式 chat 应该单独返回后端生成的 visitor event。"""
+
+    calls = []
+
+    class FakeAgentService:
+        def __init__(self, checkpointer, session_factory, settings, memory_store=None):
+            pass
+
+        async def stream_chat(self, **kwargs):
+            calls.append(kwargs)
+            yield ("start", {"code": 200, "status": "success", "thread_id": kwargs["thread_id"]})
+            yield ("done", {"content": "你好呀"})
+
+    monkeypatch.setattr(chat_route_module, "AgentService", FakeAgentService)
+    monkeypatch.setattr(chat_route_module, "new_visitor_id", lambda: "visitor-stream")
+    monkeypatch.setattr(chat_route_module, "new_thread_id", lambda: "thread-stream")
+
+    app.state.checkpointer = "checkpointer"
+    app.state.session_factory = "session-factory"
+    app.state.settings = Settings()
+    app.state.memory_store = "memory-store"
+
+    client = TestClient(app)
+    with client.stream(
+        "POST",
+        "/api/v1/chat/stream",
+        json={
+            "message": "你好",
+        },
+    ) as response:
+        body = response.read().decode()
+
+    assert response.status_code == 200
+    assert 'event: start\ndata: {"code":200,"status":"success","thread_id":"thread-stream"}' in body
+    assert (
+        'event: visitor\ndata: {"thread_id":"thread-stream","visitor_id":"visitor-stream"}'
+    ) in body
+    assert calls[0]["user_id"] == "visitor:visitor-stream"
+    assert "visitor_id" not in calls[0]
 
 
 def test_chat_resume_stream_endpoint_returns_sse_events(monkeypatch):
@@ -308,7 +444,7 @@ def test_chat_resume_stream_endpoint_returns_sse_events(monkeypatch):
             "stream_resume_chat",
             {
                 "thread_id": "thread-1",
-                "user_id": "user-1",
+                "user_id": "user:user-1",
                 "resume": {
                     "type": "auth_result",
                     "status": "failed",
