@@ -4,7 +4,6 @@ from app.tools.builtin.health import health_check
 from app.tools.builtin.memory import manage_memory, search_memory
 from app.tools.business.dashboard import get_dashboard
 from app.tools.business.metric_details import get_metric_details
-from app.tools.business.reconciliation_totals import get_reconciliation_totals
 from app.tools.business.top_pending_customer import get_top_pending_customer
 
 
@@ -17,7 +16,6 @@ def get_builtin_tools() -> list[BaseTool]:
     search_memory / manage_memory 是 LangMem 官方长期记忆工具。
     get_dashboard 是收单吧业务经营看板查询工具。
     get_metric_details 是收单吧经营指标明细查询工具。
-    get_reconciliation_totals 是收单吧收款核销对账汇总查询工具。
     get_top_pending_customer 是收单吧待收款最高客户查询工具。
     """
 
@@ -25,7 +23,6 @@ def get_builtin_tools() -> list[BaseTool]:
         health_check,
         get_dashboard,
         get_metric_details,
-        get_reconciliation_totals,
         get_top_pending_customer,
         search_memory,
         manage_memory,
