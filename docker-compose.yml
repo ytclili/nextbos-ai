@@ -1,10 +1,44 @@
 services:
+  app:
+    build: .
+    ports: ["8010:8010"]
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_DSN: postgresql+asyncpg://agent:agent@postgres:5432/agent_runtime
+      OTEL_ENABLED: "false"
+      OTEL_LOGS_ENABLED: "false"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=3).read()",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
   redis:
     image: redis/redis-stack-server:7.4.0-v6
     ports: ["6379:6379"]
     environment:
       REDIS_ARGS: "--appendonly yes --maxmemory-policy noeviction"
     volumes: ["redis_data:/data"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
   postgres:
     image: pgvector/pgvector:pg16
     ports: ["5432:5432"]
@@ -13,6 +47,12 @@ services:
       POSTGRES_PASSWORD: agent
       POSTGRES_DB: agent_runtime
     volumes: ["postgres_data:/var/lib/postgresql/data"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent -d agent_runtime"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 volumes:
   redis_data:
   postgres_data:

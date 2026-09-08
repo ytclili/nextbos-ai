@@ -4,20 +4,62 @@ LangGraph + FastAPI agent skeleton. Redis stores short-term LangGraph checkpoint
 
 ```bash
 cp .env.example .env
-uv sync --group dev
-docker compose up -d
-PYTHONPATH=src uv run uvicorn app.main:app --reload
+docker compose up -d --build
 ```
 
-Open <http://localhost:8000/docs>. PostgreSQL schema initialization creates the
+Open <http://localhost:8010/docs>. PostgreSQL schema initialization creates the
 agent-owned runtime tables: long-term memories plus LLM model profiles,
 provider credentials, and effective model config snapshots. Redis requires
 RedisJSON and RediSearch and is provided by the Redis Stack image in
 `docker-compose.yml`.
 
-The current graph is a deterministic starter node (`已收到：...`) so it runs
-without an LLM key. Add model and business integrations behind `app/llm` and
-`app/tools/business` when requirements are defined.
+For server deployment:
+
+```bash
+git clone <repo-url> nextbos-ai
+cd nextbos-ai
+cp .env.example .env
+```
+
+Edit `.env` and fill at least the LLM and business tool settings:
+
+```env
+APP_ENV=prod
+LOG_LEVEL=INFO
+
+LLM_PROVIDER=openai_compatible
+LLM_BASE_URL=https://work.tokenok.net/v1
+LLM_MODEL=gpt-5.6-sol
+LLM_API_KEY=your-llm-key
+
+CORE_INTERNAL_BASE_URL=http://your-core-service
+CORE_INTERNAL_TOKEN=your-mock-token
+
+OTEL_ENABLED=false
+OTEL_LOGS_ENABLED=false
+```
+
+Then start all services:
+
+```bash
+docker compose up -d --build
+docker compose logs -f app
+```
+
+Check health:
+
+```bash
+curl http://127.0.0.1:8010/health
+```
+
+Inside Docker Compose, the app connects to Redis/PostgreSQL through service
+names (`redis`, `postgres`), so `.env` may keep the local defaults for
+`REDIS_URL` and `POSTGRES_DSN`; `docker-compose.yml` overrides them for the app
+container.
+
+The current graph calls the configured LangChain chat model and business tools,
+so production deployment should provide a valid OpenAI-compatible LLM
+configuration in `.env`.
 
 LLM model selection is designed as a three-layer configuration flow:
 
