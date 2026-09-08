@@ -6,9 +6,13 @@ from langgraph.prebuilt import tools_condition
 from langgraph.store.base import BaseStore
 
 from app.agent.model_runtime import AgentModelRuntime
+from app.agent.nodes.clarify import clarify
+from app.agent.nodes.intent import create_intent_node
 from app.agent.nodes.respond import create_respond_node
+from app.agent.nodes.route import route_after_intent
 from app.agent.nodes.summarize import SummaryOptions, create_summarize_node
 from app.agent.nodes.tools import create_tools_node
+from app.agent.nodes.wren_context import wren_context_stub
 from app.agent.state import AgentState
 
 
@@ -33,11 +37,14 @@ def build_graph(
 ):
     """构建 agent 执行图。
 
-    图结构：
+    有模型运行时时的图结构：
 
-    summarize -> respond -> tools -> final_respond -> END
+    summarize -> intent -> direct_answer -> respond -> tools -> final_respond -> END
+                        -> wren_context_stub -> END
+                        -> clarify -> END
 
     summarize 节点负责用 LangMem 官方 SummarizationNode 压缩过长上下文；
+    intent 节点负责识别结构化意图，并用后端规则计算下一跳；
     respond 节点负责调用模型；
     tools 节点负责执行模型返回的 tool_calls。
     final_respond 节点负责在工具执行后生成最终文本，并且不再绑定工具，
@@ -74,7 +81,24 @@ def build_graph(
     builder.add_node("final_respond", final_respond_node)
 
     builder.add_edge(START, "summarize")
-    builder.add_edge("summarize", "respond")
+    if model_runtime is None:
+        builder.add_edge("summarize", "respond")
+    else:
+        builder.add_node("intent", create_intent_node(model_runtime=model_runtime))
+        builder.add_node("wren_context_stub", wren_context_stub)
+        builder.add_node("clarify", clarify)
+        builder.add_edge("summarize", "intent")
+        builder.add_conditional_edges(
+            "intent",
+            route_after_intent,
+            {
+                "direct_answer": "respond",
+                "wren_context_stub": "wren_context_stub",
+                "clarify": "clarify",
+            },
+        )
+        builder.add_edge("wren_context_stub", END)
+        builder.add_edge("clarify", END)
     builder.add_conditional_edges(
         "respond",
         tools_condition,

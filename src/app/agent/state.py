@@ -22,6 +22,14 @@ class AgentState(TypedDict, total=False):
     thread_id: str
     model_options: ChatModelOptions
 
+    # 意图识别节点输出的结构化判断结果。
+    # 这里保存 IntentDecision.model_dump() 后的可序列化快照，便于 Studio 展示、checkpoint 和回放。
+    intent_decision: dict[str, Any]
+
+    # 后端条件路由算出的下一跳名称，例如 direct_answer / wren_context_stub / clarify。
+    # 这个字段用于调试和回放，不把“下一跳怎么走”完全交给 LLM 自由决定。
+    route_target: str
+
     # 最后一次 LLM 调用使用的模型配置快照 id。
     # AgentService 会把它写入 assistant 消息，方便从聊天记录反查模型配置。
     llm_snapshot_id: UUID | None

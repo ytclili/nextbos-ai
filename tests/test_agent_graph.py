@@ -4,6 +4,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.store.memory import InMemoryStore
 
+from app.agent.intent import IntentDecision
 from app.agent.graph import build_graph
 from app.llm.models import EffectiveModelConfig, ProviderCredential
 
@@ -17,7 +18,8 @@ class FakeAgentModelRuntime:
 
     def __init__(self) -> None:
         self.resolve_calls: list[object | None] = []
-        self.chat_model = FakeChatModel()
+        self.intent_decision = _direct_answer_intent()
+        self.chat_model = FakeChatModel(self.intent_decision)
 
     async def resolve_config(self, options: object | None) -> EffectiveModelConfig:
         """模拟配置解析，并记录 graph 传进来的参数。"""
@@ -45,8 +47,13 @@ class FakeAgentModelRuntime:
 class FakeChatModel:
     """测试用 LangChain ChatModel。"""
 
-    def __init__(self) -> None:
+    def __init__(self, intent_decision: IntentDecision | None = None) -> None:
         self.calls: list[list[object]] = []
+        self.structured_calls: list[list[object]] = []
+        self.intent_decision = intent_decision or _direct_answer_intent()
+
+    def with_structured_output(self, _schema):
+        return FakeStructuredChatModel(self)
 
     def bind_tools(self, _tools):
         return self
@@ -56,12 +63,23 @@ class FakeChatModel:
         return AIMessage(content="今天可以吃牛肉面")
 
 
+class FakeStructuredChatModel:
+    """测试用结构化输出模型，只服务 intent 节点。"""
+
+    def __init__(self, chat_model: FakeChatModel) -> None:
+        self.chat_model = chat_model
+
+    async def ainvoke(self, messages):
+        self.chat_model.structured_calls.append(messages)
+        return self.chat_model.intent_decision
+
+
 class ToolCallingAgentModelRuntime(FakeAgentModelRuntime):
     """先请求调用工具，再基于工具结果返回最终回复。"""
 
     def __init__(self) -> None:
         super().__init__()
-        self.chat_model = ToolCallingChatModel()
+        self.chat_model = ToolCallingChatModel(self.intent_decision)
 
 
 class ToolCallingChatModel(FakeChatModel):
@@ -88,7 +106,7 @@ class MemoryManagingAgentModelRuntime(FakeAgentModelRuntime):
 
     def __init__(self) -> None:
         super().__init__()
-        self.chat_model = MemoryManagingChatModel()
+        self.chat_model = MemoryManagingChatModel(self.intent_decision)
 
 
 class MemoryManagingChatModel(FakeChatModel):
@@ -118,7 +136,7 @@ class MemorySearchingAgentModelRuntime(FakeAgentModelRuntime):
 
     def __init__(self) -> None:
         super().__init__()
-        self.chat_model = MemorySearchingChatModel()
+        self.chat_model = MemorySearchingChatModel(self.intent_decision)
 
 
 class MemorySearchingChatModel(FakeChatModel):
@@ -151,7 +169,7 @@ class RepeatedToolAgentModelRuntime(FakeAgentModelRuntime):
         self.chat_models: list[RepeatedToolChatModel] = []
 
     def create_chat_model(self, config: EffectiveModelConfig):
-        chat_model = RepeatedToolChatModel()
+        chat_model = RepeatedToolChatModel(self.intent_decision)
         self.chat_models.append(chat_model)
         return chat_model
 
@@ -159,8 +177,8 @@ class RepeatedToolAgentModelRuntime(FakeAgentModelRuntime):
 class RepeatedToolChatModel(FakeChatModel):
     """只要绑定了工具就继续 tool_call，没有工具时才输出最终文本。"""
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, intent_decision: IntentDecision | None = None) -> None:
+        super().__init__(intent_decision)
         self.tools_bound = False
 
     def bind_tools(self, _tools):
@@ -202,7 +220,7 @@ async def test_graph_runs_start_to_respond_to_end_with_model_runtime() -> None:
         }
     )
 
-    assert model_runtime.resolve_calls == [None]
+    assert model_runtime.resolve_calls == [None, None]
 
     called_messages = model_runtime.chat_model.calls[0]
     assert isinstance(called_messages, list)
@@ -333,6 +351,22 @@ async def test_graph_uses_tool_free_final_response_after_tool_execution() -> Non
     )
 
     assert result["messages"][-1].content == "我已经记住了。"
-    assert len(model_runtime.chat_models) == 2
-    assert model_runtime.chat_models[0].tools_bound is True
-    assert model_runtime.chat_models[1].tools_bound is False
+    assert len(model_runtime.chat_models) == 3
+    assert model_runtime.chat_models[1].tools_bound is True
+    assert model_runtime.chat_models[2].tools_bound is False
+
+
+def _direct_answer_intent() -> IntentDecision:
+    return IntentDecision(
+        intent_type="direct_answer",
+        needs_business_data=False,
+        output_type="text",
+        question_rewrite="直接回答用户问题",
+        metrics=[],
+        dimensions=[],
+        filters=[],
+        time_range=None,
+        confidence=0.9,
+        missing_slots=[],
+        clarification_question=None,
+    )
