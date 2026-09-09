@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.agent.graph import build_graph
 from app.agent.model_runtime import AgentModelRuntime
 from app.agent.options import ChatModelOptions
-from app.agent.runtime import _create_wren_context_client
+from app.agent.runtime import _create_sql_execution_client, _create_wren_context_client
 from app.core.config import Settings, get_settings
 from app.llm.chat_models import create_langchain_chat_model
 from app.llm.config_resolver import ModelConfigResolver
@@ -88,9 +88,11 @@ def create_studio_graph():
         session_factory=session_factory,
         initialize_schema=initialize_schema,
     )
+    wren_context_client = _create_wren_context_client(settings)
     return build_graph(
         model_runtime=model_runtime,
-        wren_context_client=_create_wren_context_client(settings),
+        wren_context_client=wren_context_client,
+        sql_execution_client=_create_sql_execution_client(wren_context_client),
     )
 
 

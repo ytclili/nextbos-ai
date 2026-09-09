@@ -16,8 +16,10 @@ from app.conversation.context_loader import ConversationContextLoader
 from app.conversation.repository import ConversationRepository
 from app.core.config import Settings
 from app.core.tracing import get_tracer
+from app.integrations.business.sql_executor import SqlExecutionClient
 from app.integrations.business.wren import (
     WrenContextClient,
+    WrenContextError,
     WrenLangChainContextClient,
     WrenProjectConfig,
 )
@@ -186,6 +188,7 @@ async def _prepare_graph_run(
         )
         model_config = await model_runtime.resolve_config(model_options)
         summarization_model = model_runtime.create_chat_model(model_config)
+        wren_context_client = _create_wren_context_client(settings)
 
         if checkpoint_exists:
             messages = [HumanMessage(content=message)]
@@ -207,7 +210,8 @@ async def _prepare_graph_run(
                 trigger_tokens=settings.summary_trigger_tokens,
                 max_output_tokens=settings.summary_max_output_tokens,
             ),
-            wren_context_client=_create_wren_context_client(settings),
+            wren_context_client=wren_context_client,
+            sql_execution_client=_create_sql_execution_client(wren_context_client),
         )
         yield PreparedGraphRun(
             runnable=runnable,
@@ -243,6 +247,23 @@ def _create_wren_context_client(settings: Settings) -> WrenContextClient | None:
             include_memory_write=settings.wren_include_memory_write,
         )
     )
+
+
+def _create_sql_execution_client(
+    wren_context_client: WrenContextClient | None,
+) -> SqlExecutionClient | None:
+    """从 Wren 上下文客户端派生 SQL 执行客户端。
+
+    Studio / API 共用这一层运行时装配：如果本地 Wren 工具没装好，
+    这里先不创建执行客户端，后续 sql_execute 节点会返回 skipped。
+    """
+
+    if not isinstance(wren_context_client, WrenLangChainContextClient):
+        return None
+    try:
+        return wren_context_client.create_sql_execution_client()
+    except WrenContextError:
+        return None
 
 
 async def _checkpoint_exists(checkpointer: BaseCheckpointSaver, config: dict) -> bool:

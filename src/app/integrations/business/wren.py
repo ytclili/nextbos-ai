@@ -5,6 +5,10 @@ from typing import Any, Protocol
 from pydantic import BaseModel, Field
 
 from app.agent.schemas.sql_validation import SqlValidationIssue, SqlValidationResult
+from app.integrations.business.sql_executor import (
+    LangChainToolSqlExecutionClient,
+    SqlExecutionClient,
+)
 
 
 class WrenContextFilter(BaseModel):
@@ -162,6 +166,12 @@ class WrenLangChainContextClient:
 
         tools = self.get_tools()
         return self.toolkit.system_prompt(tools=tools)
+
+    def create_sql_execution_client(self) -> SqlExecutionClient:
+        """基于官方 wren_query tool 创建 SQL 执行客户端。"""
+
+        query_tool = _required_tool(self.get_tools(), "wren_query")
+        return LangChainToolSqlExecutionClient(query_tool)
 
     async def query_context(self, request: WrenContextRequest) -> WrenContextResult:
         """在线程池中调用官方同步 SDK，避免阻塞 async LangGraph。"""
@@ -373,6 +383,15 @@ def _tool_by_name(tools: list[Any], tool_name: str) -> Any | None:
         if getattr(tool, "name", None) == tool_name:
             return tool
     return None
+
+
+def _required_tool(tools: list[Any], tool_name: str) -> Any:
+    """读取必需的官方 Wren tool；不存在时明确失败。"""
+
+    tool = _tool_by_name(tools, tool_name)
+    if tool is None:
+        raise WrenContextError(f"Wren tool {tool_name} 不存在")
+    return tool
 
 
 def _tool_data_results(payload: dict[str, Any]) -> list[dict[str, Any]]:

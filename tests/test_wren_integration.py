@@ -1,7 +1,11 @@
 from pathlib import Path
 
+import pytest
+
+from app.integrations.business.sql_executor import LangChainToolSqlExecutionClient
 from app.integrations.business.wren import (
     WrenBusinessRule,
+    WrenContextError,
     WrenContextFilter,
     WrenContextRequest,
     WrenContextResult,
@@ -295,6 +299,45 @@ def test_wren_langchain_context_client_marks_failed_after_max_repair_attempts() 
 
     assert result.status == "failed"
     assert result.issues[0].message == "Wren tool wren_dry_plan 不存在"
+
+
+def test_wren_langchain_context_client_creates_sql_execution_client() -> None:
+    """Wren 适配层应该能把官方 wren_query tool 包装成 SQL 执行客户端。"""
+
+    query_tool = FakeWrenTool(
+        "wren_query",
+        {
+            "ok": True,
+            "data": {
+                "columns": ["goods_id", "goods_name"],
+                "rows": [{"goods_id": 1, "goods_name": "苹果"}],
+            },
+        },
+    )
+    client = WrenLangChainContextClient(
+        WrenProjectConfig(project_path=Path("/tmp/wren-project")),
+        toolkit=FakeWrenToolkit([query_tool]),
+    )
+
+    execution_client = client.create_sql_execution_client()
+    result = execution_client.execute_sql_sync(sql="select id as goods_id from wms_items")
+
+    assert isinstance(execution_client, LangChainToolSqlExecutionClient)
+    assert query_tool.calls == [{"sql": "select id as goods_id from wms_items", "limit": 100}]
+    assert result.status == "succeeded"
+    assert result.rows == [{"goods_id": 1, "goods_name": "苹果"}]
+
+
+def test_wren_langchain_context_client_requires_query_tool_for_execution() -> None:
+    """没有 wren_query 时，不能创建 SQL 执行客户端。"""
+
+    client = WrenLangChainContextClient(
+        WrenProjectConfig(project_path=Path("/tmp/wren-project")),
+        toolkit=FakeWrenToolkit([]),
+    )
+
+    with pytest.raises(WrenContextError, match="Wren tool wren_query 不存在"):
+        client.create_sql_execution_client()
 
 
 class FakeWrenToolkit:

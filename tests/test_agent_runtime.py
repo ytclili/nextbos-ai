@@ -93,6 +93,7 @@ async def test_run_graph_passes_memory_store_and_langgraph_user_id(monkeypatch) 
         summarization_model,
         summary_options,
         wren_context_client,
+        sql_execution_client,
     ):
         captured["checkpointer"] = checkpointer
         captured["model_runtime"] = model_runtime
@@ -100,6 +101,7 @@ async def test_run_graph_passes_memory_store_and_langgraph_user_id(monkeypatch) 
         captured["summarization_model"] = summarization_model
         captured["summary_options"] = summary_options
         captured["wren_context_client"] = wren_context_client
+        captured["sql_execution_client"] = sql_execution_client
         return FakeRunnable()
 
     monkeypatch.setattr(runtime_module, "AgentModelRuntime", FakeAgentModelRuntime)
@@ -138,6 +140,7 @@ async def test_run_graph_passes_memory_store_and_langgraph_user_id(monkeypatch) 
     assert captured["summary_options"].trigger_tokens == 900
     assert captured["summary_options"].max_output_tokens == 300
     assert captured["wren_context_client"] is None
+    assert captured["sql_execution_client"] is None
     assert isinstance(captured["state"]["messages"][0], HumanMessage)
     assert captured["state"]["messages"][0].content == "今天吃什么？"
     assert captured["config"] == {
@@ -214,6 +217,7 @@ async def test_run_graph_restores_messages_from_postgres_when_checkpoint_is_miss
         summarization_model,
         summary_options,
         wren_context_client,
+        sql_execution_client,
     ):
         captured["checkpointer"] = checkpointer
         captured["model_runtime"] = model_runtime
@@ -221,6 +225,7 @@ async def test_run_graph_restores_messages_from_postgres_when_checkpoint_is_miss
         captured["summarization_model"] = summarization_model
         captured["summary_options"] = summary_options
         captured["wren_context_client"] = wren_context_client
+        captured["sql_execution_client"] = sql_execution_client
         return FakeRunnable()
 
     monkeypatch.setattr(runtime_module, "AgentModelRuntime", FakeAgentModelRuntime)
@@ -249,6 +254,7 @@ async def test_run_graph_restores_messages_from_postgres_when_checkpoint_is_miss
     assert captured["store"] == "memory-store"
     assert captured["summarization_model"] is summarization_model
     assert captured["wren_context_client"] is None
+    assert captured["sql_execution_client"] is None
     assert captured["config"] == {
         "configurable": {
             "thread_id": "thread-1",
@@ -316,12 +322,14 @@ async def test_stream_graph_uses_langgraph_astream_and_yields_final_state(monkey
         summarization_model,
         summary_options,
         wren_context_client,
+        sql_execution_client,
     ):
         captured["checkpointer"] = checkpointer
         captured["store"] = store
         captured["summarization_model"] = summarization_model
         captured["summary_options"] = summary_options
         captured["wren_context_client"] = wren_context_client
+        captured["sql_execution_client"] = sql_execution_client
         return FakeRunnable()
 
     monkeypatch.setattr(runtime_module, "AgentModelRuntime", FakeAgentModelRuntime)
@@ -354,6 +362,7 @@ async def test_stream_graph_uses_langgraph_astream_and_yields_final_state(monkey
     assert captured["stream_mode"] == ["messages", "updates"]
     assert captured["store"] == "memory-store"
     assert captured["wren_context_client"] is None
+    assert captured["sql_execution_client"] is None
     assert isinstance(captured["state"]["messages"][0], HumanMessage)
     assert captured["aget_state_config"] == {
         "configurable": {

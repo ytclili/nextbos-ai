@@ -21,9 +21,10 @@ def test_create_studio_graph_builds_graph_with_studio_runtime(monkeypatch) -> No
 
     captured = {}
 
-    def fake_build_graph(*, model_runtime, wren_context_client):
+    def fake_build_graph(*, model_runtime, wren_context_client, sql_execution_client):
         captured["model_runtime"] = model_runtime
         captured["wren_context_client"] = wren_context_client
+        captured["sql_execution_client"] = sql_execution_client
         return "compiled-graph"
 
     monkeypatch.setattr(studio_graph, "get_settings", lambda: Settings(wren_project_path=""))
@@ -34,6 +35,7 @@ def test_create_studio_graph_builds_graph_with_studio_runtime(monkeypatch) -> No
     assert graph == "compiled-graph"
     assert isinstance(captured["model_runtime"], studio_graph.StudioModelRuntime)
     assert captured["wren_context_client"] is None
+    assert captured["sql_execution_client"] is None
 
 
 def test_create_studio_graph_passes_configured_wren_client(monkeypatch) -> None:
@@ -44,6 +46,7 @@ def test_create_studio_graph_passes_configured_wren_client(monkeypatch) -> None:
     captured = {}
     settings = Settings(wren_project_path="/tmp/wren-project")
     wren_client = object()
+    sql_execution_client = object()
 
     def fake_create_engine(settings):
         captured["engine_settings"] = settings
@@ -57,9 +60,14 @@ def test_create_studio_graph_passes_configured_wren_client(monkeypatch) -> None:
         captured["wren_settings"] = settings
         return wren_client
 
-    def fake_build_graph(*, model_runtime, wren_context_client):
+    def fake_create_sql_execution_client(client):
+        captured["sql_execution_context_client"] = client
+        return sql_execution_client
+
+    def fake_build_graph(*, model_runtime, wren_context_client, sql_execution_client):
         captured["model_runtime"] = model_runtime
         captured["wren_context_client"] = wren_context_client
+        captured["sql_execution_client"] = sql_execution_client
         return "compiled-graph"
 
     monkeypatch.setattr(studio_graph, "get_settings", lambda: settings)
@@ -69,6 +77,11 @@ def test_create_studio_graph_passes_configured_wren_client(monkeypatch) -> None:
         studio_graph,
         "_create_wren_context_client",
         fake_create_wren_context_client,
+    )
+    monkeypatch.setattr(
+        studio_graph,
+        "_create_sql_execution_client",
+        fake_create_sql_execution_client,
     )
     monkeypatch.setattr(studio_graph, "build_graph", fake_build_graph)
 
@@ -80,6 +93,8 @@ def test_create_studio_graph_passes_configured_wren_client(monkeypatch) -> None:
     assert captured["wren_settings"] is settings
     assert isinstance(captured["model_runtime"], studio_graph.StudioModelRuntime)
     assert captured["wren_context_client"] is wren_client
+    assert captured["sql_execution_context_client"] is wren_client
+    assert captured["sql_execution_client"] is sql_execution_client
 
 
 @pytest.mark.asyncio

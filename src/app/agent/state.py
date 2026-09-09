@@ -46,6 +46,10 @@ class AgentState(TypedDict, total=False):
     # 这里保存 SqlValidationResult.model_dump() 后的可序列化快照，防止后续节点误执行未通过 SQL。
     sql_validation_result: dict[str, Any]
 
+    # SQL 受控执行节点输出的数据集快照。
+    # 这里保存 SqlExecutionResult.model_dump() 后的可序列化结果，供最终回答、表格和图表节点使用。
+    sql_execution_result: dict[str, Any]
+
     # 最后一次 LLM 调用使用的模型配置快照 id。
     # AgentService 会把它写入 assistant 消息，方便从聊天记录反查模型配置。
     llm_snapshot_id: UUID | None

@@ -5,6 +5,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from app.agent.graph import build_graph
 from app.agent.schemas.intent import IntentDecision, IntentFilter
+from app.agent.schemas.sql_execution import SqlExecutionResult
 from app.agent.schemas.sql_plan import SqlCandidate, SqlGenerationPlan
 from app.agent.schemas.sql_validation import SqlValidationIssue, SqlValidationResult
 from app.integrations.business.wren import (
@@ -150,6 +151,30 @@ class FailingWrenContextClient:
         )
 
 
+class FakeSqlExecutionClient:
+    """测试用 SQL 执行客户端，记录 graph 传入的 validated_sql。"""
+
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def execute_sql(
+        self,
+        *,
+        sql: str,
+        query_id: str | None = None,
+        max_rows: int = 100,
+    ) -> SqlExecutionResult:
+        self.calls.append({"sql": sql, "query_id": query_id, "max_rows": max_rows})
+        return SqlExecutionResult(
+            status="succeeded",
+            query_id=query_id,
+            sql=sql,
+            columns=[],
+            rows=[],
+            row_count=0,
+        )
+
+
 @pytest.mark.asyncio
 async def test_graph_routes_direct_answer_to_respond() -> None:
     """不需要业务数据时，图应该进入直接回答分支。"""
@@ -218,12 +243,14 @@ async def test_graph_routes_business_data_to_wren_context() -> None:
     assert result["sql_generation_plan"]["preferred_candidate_name"] == "primary"
     assert result["sql_validation_result"]["status"] == "failed"
     assert result["sql_validation_result"]["validated_sql"] is None
-    assert model_runtime.chat_model.calls == []
+    assert result["sql_execution_result"]["status"] == "skipped"
+    assert result["messages"][-1].content == "这是直接回答。"
+    assert len(model_runtime.chat_model.calls) == 1
 
 
 @pytest.mark.asyncio
 async def test_graph_business_data_calls_injected_wren_context_client() -> None:
-    """配置真实 Wren client 时，业务数据分支应该调用注入的上下文客户端。"""
+    """配置 Wren client 时，业务数据分支应该调用注入的上下文和执行客户端。"""
 
     model_runtime = FakeAgentModelRuntime(
         _decision(
@@ -237,9 +264,11 @@ async def test_graph_business_data_calls_injected_wren_context_client() -> None:
         )
     )
     wren_context_client = FakeWrenContextClient()
+    sql_execution_client = FakeSqlExecutionClient()
     graph = build_graph(
         model_runtime=model_runtime,
         wren_context_client=wren_context_client,
+        sql_execution_client=sql_execution_client,
     )
 
     result = await graph.ainvoke(
@@ -275,7 +304,17 @@ async def test_graph_business_data_calls_injected_wren_context_client() -> None:
     ]
     assert result["sql_validation_result"]["status"] == "passed"
     assert result["sql_validation_result"]["validated_sql"].startswith("select order_date")
-    assert model_runtime.chat_model.calls == []
+    assert sql_execution_client.calls == [
+        {
+            "sql": "select order_date, sum(paid_amount) as sales_amount from orders",
+            "query_id": result["sql_execution_result"]["query_id"],
+            "max_rows": 100,
+        }
+    ]
+    assert result["sql_execution_result"]["status"] == "succeeded"
+    assert result["sql_execution_result"]["row_count"] == 0
+    assert result["messages"][-1].content == "这是直接回答。"
+    assert len(model_runtime.chat_model.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -307,7 +346,9 @@ async def test_graph_business_data_keeps_state_when_wren_context_fails() -> None
     assert any("WrenAI 上下文查询失败" in text for text in message_texts)
     assert result["sql_generation_plan"]["status"] == "ready_for_dry_run"
     assert result["sql_validation_result"]["status"] == "failed"
-    assert model_runtime.chat_model.calls == []
+    assert result["sql_execution_result"]["status"] == "skipped"
+    assert result["messages"][-1].content == "这是直接回答。"
+    assert len(model_runtime.chat_model.calls) == 1
 
 
 @pytest.mark.asyncio
