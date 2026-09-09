@@ -1,6 +1,7 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import HumanMessage
@@ -15,6 +16,11 @@ from app.conversation.context_loader import ConversationContextLoader
 from app.conversation.repository import ConversationRepository
 from app.core.config import Settings
 from app.core.tracing import get_tracer
+from app.integrations.business.wren import (
+    WrenContextClient,
+    WrenLangChainContextClient,
+    WrenProjectConfig,
+)
 from app.llm.config_resolver import ModelConfigResolver
 from app.persistence.postgres.llm_model_repository import PostgresLLMModelRepository
 
@@ -201,6 +207,7 @@ async def _prepare_graph_run(
                 trigger_tokens=settings.summary_trigger_tokens,
                 max_output_tokens=settings.summary_max_output_tokens,
             ),
+            wren_context_client=_create_wren_context_client(settings),
         )
         yield PreparedGraphRun(
             runnable=runnable,
@@ -220,6 +227,22 @@ def _to_graph_stream_event(item: Any) -> GraphStreamEvent:
     if isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str):
         return GraphStreamEvent(mode=item[0], data=item[1])
     return GraphStreamEvent(mode="updates", data=item)
+
+
+def _create_wren_context_client(settings: Settings) -> WrenContextClient | None:
+    """根据 Settings 创建 WrenAI 上下文客户端。"""
+
+    if not settings.wren_project_path:
+        return None
+    return WrenLangChainContextClient(
+        WrenProjectConfig(
+            project_path=Path(settings.wren_project_path),
+            profile=settings.wren_profile or None,
+            context_limit=settings.wren_context_limit,
+            recall_limit=settings.wren_recall_limit,
+            include_memory_write=settings.wren_include_memory_write,
+        )
+    )
 
 
 async def _checkpoint_exists(checkpointer: BaseCheckpointSaver, config: dict) -> bool:

@@ -21,8 +21,9 @@ def test_create_studio_graph_builds_graph_with_studio_runtime(monkeypatch) -> No
 
     captured = {}
 
-    def fake_build_graph(*, model_runtime):
+    def fake_build_graph(*, model_runtime, wren_context_client):
         captured["model_runtime"] = model_runtime
+        captured["wren_context_client"] = wren_context_client
         return "compiled-graph"
 
     monkeypatch.setattr(studio_graph, "build_graph", fake_build_graph)
@@ -31,6 +32,53 @@ def test_create_studio_graph_builds_graph_with_studio_runtime(monkeypatch) -> No
 
     assert graph == "compiled-graph"
     assert isinstance(captured["model_runtime"], studio_graph.StudioModelRuntime)
+    assert captured["wren_context_client"] is None
+
+
+def test_create_studio_graph_passes_configured_wren_client(monkeypatch) -> None:
+    """Studio graph 配置了 Wren project 时，应该把 Wren 客户端注入 graph。"""
+
+    from app.agent import studio_graph
+
+    captured = {}
+    settings = Settings(wren_project_path="/tmp/wren-project")
+    wren_client = object()
+
+    def fake_create_engine(settings):
+        captured["engine_settings"] = settings
+        return "engine"
+
+    def fake_create_session_factory(*, engine):
+        captured["session_engine"] = engine
+        return "session-factory"
+
+    def fake_create_wren_context_client(settings):
+        captured["wren_settings"] = settings
+        return wren_client
+
+    def fake_build_graph(*, model_runtime, wren_context_client):
+        captured["model_runtime"] = model_runtime
+        captured["wren_context_client"] = wren_context_client
+        return "compiled-graph"
+
+    monkeypatch.setattr(studio_graph, "get_settings", lambda: settings)
+    monkeypatch.setattr(studio_graph, "create_engine", fake_create_engine)
+    monkeypatch.setattr(studio_graph, "create_session_factory", fake_create_session_factory)
+    monkeypatch.setattr(
+        studio_graph,
+        "_create_wren_context_client",
+        fake_create_wren_context_client,
+    )
+    monkeypatch.setattr(studio_graph, "build_graph", fake_build_graph)
+
+    graph = studio_graph.create_studio_graph()
+
+    assert graph == "compiled-graph"
+    assert captured["engine_settings"] is settings
+    assert captured["session_engine"] == "engine"
+    assert captured["wren_settings"] is settings
+    assert isinstance(captured["model_runtime"], studio_graph.StudioModelRuntime)
+    assert captured["wren_context_client"] is wren_client
 
 
 @pytest.mark.asyncio

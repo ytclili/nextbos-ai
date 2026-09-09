@@ -26,9 +26,25 @@ class AgentState(TypedDict, total=False):
     # 这里保存 IntentDecision.model_dump() 后的可序列化快照，便于 Studio 展示、checkpoint 和回放。
     intent_decision: dict[str, Any]
 
-    # 后端条件路由算出的下一跳名称，例如 direct_answer / wren_context_stub / clarify。
+    # 后端条件路由算出的下一跳名称，例如 direct_answer / wren_context / clarify。
     # 这个字段用于调试和回放，不把“下一跳怎么走”完全交给 LLM 自由决定。
     route_target: str
+
+    # WrenAI 上下文查询结果。
+    # 这里保存 WrenContextResult.model_dump() 后的可序列化快照，供后续 SQL 规划节点使用。
+    wren_context: dict[str, Any]
+
+    # WrenAI 上下文查询请求。
+    # 这里保存 WrenContextRequest.model_dump() 后的可序列化快照，方便 Studio 调试和回放。
+    wren_context_request: dict[str, Any]
+
+    # SQL 规划节点输出的结构化计划。
+    # 这里保存 SqlGenerationPlan.model_dump() 后的可序列化快照，供后续 dry-run 节点使用。
+    sql_generation_plan: dict[str, Any]
+
+    # Wren dry-plan / dry-run 节点输出的 SQL 校验结果。
+    # 这里保存 SqlValidationResult.model_dump() 后的可序列化快照，防止后续节点误执行未通过 SQL。
+    sql_validation_result: dict[str, Any]
 
     # 最后一次 LLM 调用使用的模型配置快照 id。
     # AgentService 会把它写入 assistant 消息，方便从聊天记录反查模型配置。

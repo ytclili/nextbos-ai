@@ -4,8 +4,8 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.store.memory import InMemoryStore
 
-from app.agent.intent import IntentDecision
 from app.agent.graph import build_graph
+from app.agent.schemas.intent import IntentDecision
 from app.llm.models import EffectiveModelConfig, ProviderCredential
 
 

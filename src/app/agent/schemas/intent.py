@@ -11,7 +11,7 @@ IntentType = Literal[
     "clarification",
 ]
 OutputType = Literal["text", "table", "chart", "report"]
-RouteTarget = Literal["direct_answer", "wren_context_stub", "clarify"]
+RouteTarget = Literal["direct_answer", "wren_context", "clarify"]
 
 
 class IntentFilter(BaseModel):

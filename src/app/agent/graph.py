@@ -10,10 +10,13 @@ from app.agent.nodes.clarify import clarify
 from app.agent.nodes.intent import create_intent_node
 from app.agent.nodes.respond import create_respond_node
 from app.agent.nodes.route import route_after_intent
+from app.agent.nodes.sql_plan import create_sql_plan_node
+from app.agent.nodes.sql_validate import create_sql_validate_node
 from app.agent.nodes.summarize import SummaryOptions, create_summarize_node
 from app.agent.nodes.tools import create_tools_node
-from app.agent.nodes.wren_context import wren_context_stub
+from app.agent.nodes.wren_context import create_wren_context_node
 from app.agent.state import AgentState
+from app.integrations.business.wren import WrenContextClient
 
 
 def fallback_respond(state: AgentState) -> dict[str, list[AIMessage]]:
@@ -34,17 +37,21 @@ def build_graph(
     store: BaseStore | None = None,
     summarization_model: Any | None = None,
     summary_options: SummaryOptions | None = None,
+    wren_context_client: WrenContextClient | None = None,
 ):
     """构建 agent 执行图。
 
     有模型运行时时的图结构：
 
     summarize -> intent -> direct_answer -> respond -> tools -> final_respond -> END
-                        -> wren_context_stub -> END
+                        -> wren_context -> sql_plan -> sql_validate -> END
                         -> clarify -> END
 
     summarize 节点负责用 LangMem 官方 SummarizationNode 压缩过长上下文；
     intent 节点负责识别结构化意图，并用后端规则计算下一跳；
+    wren_context 节点负责查询 WrenAI 业务上下文；
+    sql_plan 节点负责基于 WrenAI 上下文生成可校验的 SQL 计划；
+    sql_validate 节点负责通过 Wren dry-plan / dry-run 校验候选 SQL；
     respond 节点负责调用模型；
     tools 节点负责执行模型返回的 tool_calls。
     final_respond 节点负责在工具执行后生成最终文本，并且不再绑定工具，
@@ -85,7 +92,15 @@ def build_graph(
         builder.add_edge("summarize", "respond")
     else:
         builder.add_node("intent", create_intent_node(model_runtime=model_runtime))
-        builder.add_node("wren_context_stub", wren_context_stub)
+        builder.add_node(
+            "wren_context",
+            create_wren_context_node(wren_context_client=wren_context_client),
+        )
+        builder.add_node("sql_plan", create_sql_plan_node(model_runtime=model_runtime))
+        builder.add_node(
+            "sql_validate",
+            create_sql_validate_node(wren_context_client=wren_context_client),
+        )
         builder.add_node("clarify", clarify)
         builder.add_edge("summarize", "intent")
         builder.add_conditional_edges(
@@ -93,11 +108,13 @@ def build_graph(
             route_after_intent,
             {
                 "direct_answer": "respond",
-                "wren_context_stub": "wren_context_stub",
+                "wren_context": "wren_context",
                 "clarify": "clarify",
             },
         )
-        builder.add_edge("wren_context_stub", END)
+        builder.add_edge("wren_context", "sql_plan")
+        builder.add_edge("sql_plan", "sql_validate")
+        builder.add_edge("sql_validate", END)
         builder.add_edge("clarify", END)
     builder.add_conditional_edges(
         "respond",

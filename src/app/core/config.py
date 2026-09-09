@@ -27,6 +27,14 @@ class Settings(BaseSettings):
     summary_trigger_tokens: int = 6000
     summary_max_output_tokens: int = 800
 
+    # WrenAI 官方 wren-langchain 配置。
+    # wren_project_path 为空时不启用真实 Wren 上下文查询，Studio 可继续使用当前占位快照调试图结构。
+    wren_project_path: str = ""
+    wren_profile: str = ""
+    wren_context_limit: int = Field(default=5, ge=1, le=20)
+    wren_recall_limit: int = Field(default=3, ge=0, le=10)
+    wren_include_memory_write: bool = False
+
     # 后台动态配置落库时对 api_key 做应用层加密的密钥（预留）
     config_encryption_key: str = ""
 

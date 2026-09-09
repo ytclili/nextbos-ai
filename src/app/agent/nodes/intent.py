@@ -5,8 +5,8 @@ from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
-from app.agent.intent import IntentDecision, RouteTarget
 from app.agent.model_runtime import AgentModelRuntime
+from app.agent.schemas.intent import IntentDecision, RouteTarget
 from app.agent.state import AgentState
 from app.core.tracing import get_tracer
 
@@ -60,7 +60,7 @@ def route_intent_decision(decision: IntentDecision) -> RouteTarget:
     if decision.intent_type == "clarification" or decision.missing_slots:
         return "clarify"
     if decision.needs_business_data:
-        return "wren_context_stub"
+        return "wren_context"
     return "direct_answer"
 
 

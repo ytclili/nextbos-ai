@@ -4,8 +4,8 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from openai.lib._pydantic import to_strict_json_schema
 
-from app.agent.intent import IntentDecision, IntentFilter
 from app.agent.nodes.intent import create_intent_node, route_intent_decision
+from app.agent.schemas.intent import IntentDecision, IntentFilter
 from app.llm.models import EffectiveModelConfig, ProviderCredential
 
 
@@ -63,7 +63,7 @@ def test_route_intent_decision_uses_deterministic_backend_rules() -> None:
     """后端规则应该根据结构化意图稳定选择下一跳。"""
 
     assert route_intent_decision(_decision(needs_business_data=False)) == "direct_answer"
-    assert route_intent_decision(_decision(needs_business_data=True)) == "wren_context_stub"
+    assert route_intent_decision(_decision(needs_business_data=True)) == "wren_context"
     assert (
         route_intent_decision(
             _decision(
@@ -129,7 +129,7 @@ async def test_intent_node_passes_context_and_current_question_to_structured_mod
     assert "当前需要识别意图的用户问题是" in model_runtime.chat_model.messages[-1].content
     assert "华东" in model_runtime.chat_model.messages[-1].content
     assert result["intent_decision"]["question_rewrite"] == "分析本月华东区域销售额下降原因"
-    assert result["route_target"] == "wren_context_stub"
+    assert result["route_target"] == "wren_context"
     assert result["llm_snapshot_id"] == model_runtime.snapshot_id
 
 
