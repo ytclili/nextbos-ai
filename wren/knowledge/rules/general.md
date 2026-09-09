@@ -46,6 +46,15 @@
 - 订单明细和商品通过 `wms_outbound_order_lines.item_id = wms_items.id` 关联。
 - 用户提到收货地址、省、市、区县时，优先使用 `wms_customer_shipping_addresses`。
 
+## 条件抽取原则
+
+- 用户提到库存、可卖库存、可用库存时，使用 `wms_item_inventory_policies.available_inventory`。
+- 库存类查询需要通过 `wms_item_inventory_policies.tenant_id = wms_items.tenant_id AND wms_item_inventory_policies.item_id = wms_items.id` 关联商品主档。
+- 自然语言里的修饰词、口语量词、模糊描述或不确定条件，不要直接写成 WHERE 过滤条件。
+- 只有用户明确表达某个字段必须等于、包含、属于某个值时，才把这个值写入 WHERE。
+- 如果某个词既可能是业务字段值，也可能只是自然语言表达，优先把相关字段放进 SELECT 用于展示，不要用于过滤。
+- 例如“火腿肠还剩多少根”里的“火腿肠”是商品名称过滤条件，“根”是不确定单位表达；应返回库存数量和实际单位，不要按单位过滤。
+
 ## 默认约束
 
 - 只生成只读查询，不生成写入、更新、删除、DDL 或管理类 SQL。

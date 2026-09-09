@@ -6,10 +6,16 @@ from langgraph.prebuilt import tools_condition
 from langgraph.store.base import BaseStore
 
 from app.agent.model_runtime import AgentModelRuntime
+from app.agent.nodes.chart_plan import create_chart_plan_node
+from app.agent.nodes.chart_spec import create_chart_spec_node
 from app.agent.nodes.clarify import clarify
 from app.agent.nodes.intent import create_intent_node
 from app.agent.nodes.respond import create_respond_node
-from app.agent.nodes.route import route_after_intent, route_after_sql_plan
+from app.agent.nodes.route import (
+    route_after_intent,
+    route_after_sql_execute,
+    route_after_sql_plan,
+)
 from app.agent.nodes.sql_execute import create_sql_execute_node
 from app.agent.nodes.sql_plan import create_sql_plan_node
 from app.agent.nodes.sql_validate import create_sql_validate_node
@@ -49,6 +55,7 @@ def build_graph(
     summarize -> intent -> direct_answer -> respond -> tools -> final_respond -> END
                         -> wren_context -> sql_plan -> sql_validate -> sql_execute
                            -> final_respond -> END
+                           -> chart_plan -> chart_spec -> final_respond -> END
                                                     -> clarify -> END
                         -> clarify -> END
 
@@ -58,6 +65,8 @@ def build_graph(
     sql_plan 节点负责基于 WrenAI 上下文生成可校验的 SQL 计划；
     sql_validate 节点负责通过 Wren dry-plan / dry-run 校验候选 SQL；
     sql_execute 节点负责执行通过校验的 SQL，并把真实数据集写入 state；
+    chart_plan 节点负责生成图表规划，第一阶段先作为图表分支占位；
+    chart_spec 节点负责把图表规划和真实 SQL rows 组装成 ECharts option；
     respond 节点负责调用模型；
     tools 节点负责执行模型返回的 tool_calls。
     final_respond 节点负责在工具执行后生成最终文本，并且不再绑定工具，
@@ -111,6 +120,8 @@ def build_graph(
             "sql_execute",
             create_sql_execute_node(sql_execution_client=sql_execution_client),
         )
+        builder.add_node("chart_plan", create_chart_plan_node(model_runtime=model_runtime))
+        builder.add_node("chart_spec", create_chart_spec_node())
         builder.add_node("clarify", clarify)
         builder.add_edge("summarize", "intent")
         builder.add_conditional_edges(
@@ -132,7 +143,16 @@ def build_graph(
             },
         )
         builder.add_edge("sql_validate", "sql_execute")
-        builder.add_edge("sql_execute", "final_respond")
+        builder.add_conditional_edges(
+            "sql_execute",
+            route_after_sql_execute,
+            {
+                "final_respond": "final_respond",
+                "chart_plan": "chart_plan",
+            },
+        )
+        builder.add_edge("chart_plan", "chart_spec")
+        builder.add_edge("chart_spec", "final_respond")
         builder.add_edge("clarify", END)
     builder.add_conditional_edges(
         "respond",

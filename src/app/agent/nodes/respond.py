@@ -1,7 +1,8 @@
+import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, SystemMessage
 
 from app.agent.model_runtime import AgentModelRuntime
 from app.agent.prompts.renderer import prepend_system_prompt
@@ -12,6 +13,7 @@ from app.tools.registry import get_builtin_tools
 tracer = get_tracer(__name__)
 
 RespondNode = Callable[[AgentState], Awaitable[dict[str, Any]]]
+MAX_SQL_CONTEXT_ROWS = 20
 
 
 def create_respond_node(
@@ -50,7 +52,10 @@ def create_respond_node(
                 messages = state.get("summarized_messages") or raw_messages
             else:
                 messages = raw_messages
-            model_messages = prepend_system_prompt(messages)
+            model_messages = _append_runtime_context(
+                prepend_system_prompt(messages),
+                state,
+            )
 
             span.set_attribute("agent.node.name", "respond")
             span.set_attribute("agent.messages.count", len(raw_messages))
@@ -94,3 +99,91 @@ def create_respond_node(
             }
 
     return respond
+
+
+def _append_runtime_context(
+    messages: list[object],
+    state: AgentState,
+) -> list[object]:
+    """把 SQL 和图表结果追加到模型输入，不写回 LangGraph state。
+
+    final_respond 会在 SQL 执行后调用模型生成最终解释。
+    如果不把 state 里的 sql_execution_result 显式放进模型输入，
+    模型只能看到“SQL 执行成功”这类提示，看不到真实 rows。
+    """
+
+    messages = _append_sql_execution_context(messages, state)
+    return _append_chart_spec_context(messages, state)
+
+
+def _append_sql_execution_context(
+    messages: list[object],
+    state: AgentState,
+) -> list[object]:
+    """把 SQL 执行结果追加到模型输入，不写回 LangGraph state。"""
+
+    execution_result = state.get("sql_execution_result")
+    if not execution_result:
+        return messages
+
+    context = {
+        "sql_execution_result": _compact_sql_execution_result(execution_result),
+        "answer_rules": [
+            "只能基于这里的真实 SQL 执行结果回答，不要编造未返回的数据。",
+            "如果 rows 为空，要明确说明没有查到符合条件的数据。",
+            "除非用户明确要求，不要主动展示 SQL 原文。",
+        ],
+    }
+    return [
+        *messages,
+        SystemMessage(
+            content="SQL 执行结果上下文：\n"
+            + json.dumps(context, ensure_ascii=False, default=str),
+        ),
+    ]
+
+
+def _append_chart_spec_context(
+    messages: list[object],
+    state: AgentState,
+) -> list[object]:
+    """把图表配置结果追加到模型输入，不写回 LangGraph state。"""
+
+    chart_spec_result = state.get("chart_spec_result")
+    if not chart_spec_result:
+        return messages
+
+    context = {
+        "chart_spec_result": chart_spec_result,
+        "answer_rules": [
+            "如果 chart_spec_result.status 是 succeeded，要说明图表已经生成。",
+            "图表渲染配置是后端基于真实 SQL 结果生成的 ECharts option。",
+            "不要编造 chart_spec_result 中不存在的图表或数据。",
+        ],
+    }
+    return [
+        *messages,
+        SystemMessage(
+            content="图表配置结果上下文：\n"
+            + json.dumps(context, ensure_ascii=False, default=str),
+        ),
+    ]
+
+
+def _compact_sql_execution_result(execution_result: dict[str, Any]) -> dict[str, Any]:
+    """压缩 SQL 执行结果，避免最终回答 prompt 过大。"""
+
+    rows = execution_result.get("rows")
+    if not isinstance(rows, list):
+        rows = []
+
+    return {
+        "status": execution_result.get("status"),
+        "query_id": execution_result.get("query_id"),
+        "columns": execution_result.get("columns") or [],
+        "rows": rows[:MAX_SQL_CONTEXT_ROWS],
+        "row_count": execution_result.get("row_count", len(rows)),
+        "truncated": execution_result.get("truncated", False)
+        or len(rows) > MAX_SQL_CONTEXT_ROWS,
+        "error": execution_result.get("error"),
+    }

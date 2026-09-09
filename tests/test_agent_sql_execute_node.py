@@ -50,6 +50,39 @@ async def test_sql_execute_node_executes_passed_validated_sql() -> None:
 
 
 @pytest.mark.asyncio
+async def test_sql_execute_node_marks_empty_or_null_result_for_review() -> None:
+    """SQL 执行成功但结果为空或全为空值时，节点应该标记需要复核。"""
+
+    execution_result = SqlExecutionResult(
+        status="succeeded",
+        sql="select sum(available_inventory) as remaining_quantity_roots from wms_items",
+        columns=[{"name": "remaining_quantity_roots"}],
+        rows=[{"remaining_quantity_roots": None}],
+        row_count=1,
+    )
+    execution_client = FakeSqlExecutionClient(execution_result)
+    node = create_sql_execute_node(sql_execution_client=execution_client)
+
+    result = await node(
+        {
+            "sql_validation_result": SqlValidationResult(
+                candidate_name="primary",
+                sql="select sum(available_inventory) from wms_items",
+                status="passed",
+                validated_sql=(
+                    "select sum(available_inventory) as remaining_quantity_roots "
+                    "from wms_items"
+                ),
+            ).model_dump()
+        }
+    )
+
+    assert result["sql_execution_result"]["status"] == "succeeded"
+    assert result["sql_result_review"]["needs_review"] is True
+    assert result["sql_result_review"]["reason"] == "SQL 执行成功但结果为空或全为空值"
+
+
+@pytest.mark.asyncio
 async def test_sql_execute_node_skips_when_validation_not_passed() -> None:
     """SQL 未通过校验时，节点不能执行 SQL。"""
 

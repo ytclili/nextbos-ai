@@ -44,6 +44,7 @@ def create_sql_execute_node(
 
         return {
             "sql_execution_result": result.model_dump(),
+            "sql_result_review": _review_sql_execution_result(result),
             "messages": [AIMessage(content=_execution_message(result))],
         }
 
@@ -76,3 +77,21 @@ def _execution_message(result: SqlExecutionResult) -> str:
     if result.status == "skipped":
         return f"SQL 执行已跳过：{result.error.message if result.error else '未满足执行条件'}"
     return f"SQL 执行失败：{result.error.message if result.error else '未知错误'}"
+
+
+def _review_sql_execution_result(result: SqlExecutionResult) -> dict[str, Any]:
+    """标记需要复核的执行结果，供后续 SQL 修复路由使用。"""
+
+    needs_review = result.status == "succeeded" and _has_empty_or_null_result(result)
+    return {
+        "needs_review": needs_review,
+        "reason": "SQL 执行成功但结果为空或全为空值" if needs_review else None,
+    }
+
+
+def _has_empty_or_null_result(result: SqlExecutionResult) -> bool:
+    """判断结果是否没有可用于回答的有效值。"""
+
+    if result.row_count == 0 or not result.rows:
+        return True
+    return all(value is None for row in result.rows for value in row.values())

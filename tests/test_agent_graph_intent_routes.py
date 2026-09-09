@@ -4,6 +4,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.agent.graph import build_graph
+from app.agent.schemas.chart import ChartEncoding, ChartPlan
 from app.agent.schemas.intent import IntentDecision, IntentFilter
 from app.agent.schemas.sql_execution import SqlExecutionResult
 from app.agent.schemas.sql_plan import SqlCandidate, SqlGenerationPlan
@@ -24,10 +25,12 @@ class FakeAgentModelRuntime:
         self,
         decision: IntentDecision,
         sql_plan: SqlGenerationPlan | None = None,
+        chart_plan: ChartPlan | None = None,
     ) -> None:
         self.decision = decision
         self.sql_plan = sql_plan or _sql_plan()
-        self.chat_model = FakeChatModel(decision, self.sql_plan)
+        self.chart_plan = chart_plan or _chart_plan()
+        self.chat_model = FakeChatModel(decision, self.sql_plan, self.chart_plan)
         self.snapshot_id = uuid4()
 
     async def resolve_config(self, options: object | None) -> EffectiveModelConfig:
@@ -54,9 +57,15 @@ class FakeAgentModelRuntime:
 class FakeChatModel:
     """同时模拟 intent 结构化输出和 direct answer 普通回复。"""
 
-    def __init__(self, decision: IntentDecision, sql_plan: SqlGenerationPlan) -> None:
+    def __init__(
+        self,
+        decision: IntentDecision,
+        sql_plan: SqlGenerationPlan,
+        chart_plan: ChartPlan,
+    ) -> None:
         self.decision = decision
         self.sql_plan = sql_plan
+        self.chart_plan = chart_plan
         self.calls = []
         self.structured_calls = []
 
@@ -82,6 +91,8 @@ class FakeStructuredChatModel:
         self.chat_model.structured_calls.append({"schema": self.schema, "messages": messages})
         if self.schema is SqlGenerationPlan:
             return self.chat_model.sql_plan
+        if self.schema is ChartPlan:
+            return self.chat_model.chart_plan
         return self.chat_model.decision
 
 
@@ -318,6 +329,55 @@ async def test_graph_business_data_calls_injected_wren_context_client() -> None:
 
 
 @pytest.mark.asyncio
+async def test_graph_routes_chart_output_to_chart_plan_after_sql_execute() -> None:
+    """图表请求在 SQL 执行后应该进入 chart_plan 分支。"""
+
+    expected_chart_plan = _chart_plan()
+    model_runtime = FakeAgentModelRuntime(
+        decision=_decision(
+            intent_type="chart_request",
+            needs_business_data=True,
+            output_type="chart",
+            question_rewrite="画一下本月华东销售额趋势图",
+            metrics=["销售额"],
+            dimensions=["日期"],
+            filters={"区域": "华东"},
+            time_range="本月",
+        ),
+        chart_plan=expected_chart_plan,
+    )
+    wren_context_client = FakeWrenContextClient()
+    sql_execution_client = FakeSqlExecutionClient()
+    graph = build_graph(
+        model_runtime=model_runtime,
+        wren_context_client=wren_context_client,
+        sql_execution_client=sql_execution_client,
+    )
+
+    result = await graph.ainvoke(
+        {
+            "messages": [HumanMessage(content="画一下本月华东销售额趋势图")],
+            "model_options": None,
+        }
+    )
+
+    assert result["sql_execution_result"]["status"] == "succeeded"
+    assert result["chart_plan_result"] == expected_chart_plan.model_dump()
+    assert result["chart_spec_result"] == {
+        "status": "skipped",
+        "chart": None,
+        "message": "SQL 结果为空，无法生成图表。",
+    }
+    assert result["messages"][-1].content == "这是直接回答。"
+    assert len(model_runtime.chat_model.calls) == 1
+    assert [call["schema"] for call in model_runtime.chat_model.structured_calls] == [
+        IntentDecision,
+        SqlGenerationPlan,
+        ChartPlan,
+    ]
+
+
+@pytest.mark.asyncio
 async def test_graph_business_data_keeps_state_when_wren_context_fails() -> None:
     """Wren 查询失败时，图不应直接崩溃，而应写入可调试的错误快照。"""
 
@@ -469,4 +529,15 @@ def _sql_plan() -> SqlGenerationPlan:
         ],
         preferred_candidate_name="primary",
         confidence=0.8,
+    )
+
+
+def _chart_plan() -> ChartPlan:
+    return ChartPlan(
+        chart_type="line",
+        title="华东销售额趋势",
+        x=ChartEncoding(field="order_date", label="日期"),
+        y=ChartEncoding(field="sales_amount", label="销售额"),
+        series=None,
+        description="按日期展示华东销售额变化。",
     )

@@ -4,6 +4,7 @@ from app.agent.schemas.intent import RouteTarget
 from app.agent.state import AgentState
 
 SqlPlanRouteTarget = Literal["sql_validate", "clarify"]
+SqlExecuteRouteTarget = Literal["final_respond", "chart_plan"]
 
 
 def route_after_intent(state: AgentState) -> RouteTarget:
@@ -22,3 +23,12 @@ def route_after_sql_plan(state: AgentState) -> SqlPlanRouteTarget:
     if plan.get("status") == "ready_for_dry_run" and plan.get("candidates"):
         return "sql_validate"
     return "clarify"
+
+
+def route_after_sql_execute(state: AgentState) -> SqlExecuteRouteTarget:
+    """SQL 执行后按输出类型分到普通数据回答或图表分支。"""
+
+    intent_decision = state.get("intent_decision") or {}
+    if intent_decision.get("output_type") == "chart":
+        return "chart_plan"
+    return "final_respond"

@@ -140,6 +140,90 @@ async def test_respond_node_prepends_system_prompt_without_persisting_it() -> No
     assert result["messages"] == [AIMessage(content="假模型回复")]
 
 
+@pytest.mark.asyncio
+async def test_final_respond_node_appends_sql_execution_context() -> None:
+    """最终回答节点应该把 SQL 执行结果作为真实数据上下文传给大模型。"""
+
+    model_runtime = FakeAgentModelRuntime()
+    node = create_respond_node(
+        model_runtime=model_runtime,
+        tools_enabled=False,
+        prefer_summarized_messages=False,
+    )
+
+    await node(
+        {
+            "messages": [HumanMessage(content="火腿肠还剩多少库存？")],
+            "model_options": None,
+            "sql_execution_result": {
+                "status": "succeeded",
+                "query_id": "query-1",
+                "sql": "select available_inventory from wms_items",
+                "columns": [
+                    {"name": "item_name"},
+                    {"name": "available_inventory"},
+                ],
+                "rows": [
+                    {
+                        "item_name": "火腿肠",
+                        "available_inventory": "50.000000",
+                    }
+                ],
+                "row_count": 1,
+                "truncated": False,
+            },
+        }
+    )
+
+    assert model_runtime.chat_model is not None
+    model_messages = model_runtime.chat_model.messages
+    assert isinstance(model_messages[-1], SystemMessage)
+    assert "SQL 执行结果" in model_messages[-1].content
+    assert "火腿肠" in model_messages[-1].content
+    assert "available_inventory" in model_messages[-1].content
+
+
+@pytest.mark.asyncio
+async def test_final_respond_node_appends_chart_spec_context() -> None:
+    """最终回答节点应该把图表配置结果传给大模型，方便解释图表输出。"""
+
+    model_runtime = FakeAgentModelRuntime()
+    node = create_respond_node(
+        model_runtime=model_runtime,
+        tools_enabled=False,
+        prefer_summarized_messages=False,
+    )
+
+    await node(
+        {
+            "messages": [HumanMessage(content="画一下本月华东销售额趋势图")],
+            "model_options": None,
+            "chart_spec_result": {
+                "status": "succeeded",
+                "chart": {
+                    "type": "echarts",
+                    "title": "华东销售额趋势",
+                    "chart_type": "line",
+                    "option": {
+                        "xAxis": {"type": "category", "data": ["2026-09-01"]},
+                        "yAxis": {"type": "value"},
+                        "series": [{"type": "line", "data": [100]}],
+                    },
+                    "source_fields": ["order_date", "sales_amount"],
+                    "row_count": 1,
+                },
+            },
+        }
+    )
+
+    assert model_runtime.chat_model is not None
+    model_messages = model_runtime.chat_model.messages
+    assert isinstance(model_messages[-1], SystemMessage)
+    assert "图表配置结果" in model_messages[-1].content
+    assert "echarts" in model_messages[-1].content
+    assert "华东销售额趋势" in model_messages[-1].content
+
+
 def test_summarize_node_skips_when_model_is_missing() -> None:
     """没有 summary 模型时，summarize 节点应该把 messages 原样传给 respond。"""
 

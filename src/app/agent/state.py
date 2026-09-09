@@ -50,6 +50,18 @@ class AgentState(TypedDict, total=False):
     # 这里保存 SqlExecutionResult.model_dump() 后的可序列化结果，供最终回答、表格和图表节点使用。
     sql_execution_result: dict[str, Any]
 
+    # SQL 执行结果复核信号。
+    # 例如 SQL 执行成功但结果为空或全为空值时，后续节点可以据此决定是否尝试修复查询。
+    sql_result_review: dict[str, Any]
+
+    # 图表规划节点输出。
+    # 第一阶段先保存图表分支占位结果，后续会替换为真实 ChartPlan。
+    chart_plan_result: dict[str, Any]
+
+    # 图表渲染配置节点输出。
+    # 这里保存后端基于真实 SQL rows 生成的 ECharts option 快照。
+    chart_spec_result: dict[str, Any]
+
     # 最后一次 LLM 调用使用的模型配置快照 id。
     # AgentService 会把它写入 assistant 消息，方便从聊天记录反查模型配置。
     llm_snapshot_id: UUID | None
