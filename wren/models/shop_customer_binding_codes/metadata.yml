@@ -1,0 +1,73 @@
+name: shop_customer_binding_codes
+table_reference:
+  catalog: ""
+  schema: public
+  table: shop_customer_binding_codes
+columns:
+  - name: id
+    type: BIGINT
+    is_calculated: false
+    not_null: true
+    is_primary_key: true
+    properties:
+      description: 绑定码记录主键。
+  - name: tenant_id
+    type: BIGINT
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 租户 ID。
+  - name: wms_customer_id
+    type: BIGINT
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 绑定码对应的 WMS 客户 ID。
+  - name: phone
+    type: VARCHAR(32)
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 绑定码限定手机号，用于按手机号发放和校验绑定。
+  - name: code_hash
+    type: BYTEA
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 绑定码哈希值，不存明文绑定码。
+  - name: expires_at
+    type: TIMESTAMPTZ
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 绑定码过期时间。
+  - name: used_at
+    type: TIMESTAMPTZ
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 绑定码使用时间，非空表示已使用。
+  - name: created_by
+    type: BIGINT
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 创建绑定码的 WMS 管理员用户 ID。
+  - name: created_at
+    type: TIMESTAMPTZ
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 绑定码创建时间。
+primary_key: id
+cached: false
+properties:
+  description: WMS 管理端生成给小程序用户绑定客户的验证码/绑定码表。

@@ -1,0 +1,101 @@
+name: wms_item_categories
+table_reference:
+  catalog: ""
+  schema: public
+  table: wms_item_categories
+columns:
+  - name: id
+    type: BIGINT
+    is_calculated: false
+    not_null: true
+    is_primary_key: true
+    properties:
+      description: 商品分类主键。
+  - name: tenant_id
+    type: BIGINT
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 租户 ID。
+  - name: parent_id
+    type: BIGINT
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 父级分类 ID；一级分类为空，二级分类指向一级分类。
+  - name: level
+    type: INTEGER
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 分类层级，1 表示一级分类，2 表示二级分类。
+  - name: code
+    type: VARCHAR(100)
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 分类编码，租户内唯一且为大写。
+  - name: name
+    type: VARCHAR(100)
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 分类名称。
+  - name: sort_order
+    type: INTEGER
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 分类排序值。
+  - name: status
+    type: VARCHAR(16)
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 分类状态，可选 active、inactive。
+  - name: version
+    type: INTEGER
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 并发更新版本号。
+  - name: created_by
+    type: BIGINT
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 创建分类的 WMS 管理员用户 ID。
+  - name: updated_by
+    type: BIGINT
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 最后更新分类的 WMS 管理员用户 ID。
+  - name: created_at
+    type: TIMESTAMPTZ
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 分类创建时间。
+  - name: updated_at
+    type: TIMESTAMPTZ
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 分类最后更新时间。
+primary_key: id
+cached: false
+properties:
+  description: WMS 商品分类表，小程序商品分类列表和分类商品查询使用该表。

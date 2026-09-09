@@ -1,0 +1,59 @@
+name: shop_sessions
+table_reference:
+  catalog: ""
+  schema: public
+  table: shop_sessions
+columns:
+  - name: id
+    type: BIGINT
+    is_calculated: false
+    not_null: true
+    is_primary_key: true
+    properties:
+      description: Shop 登录会话主键。
+  - name: tenant_id
+    type: BIGINT
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 租户 ID。
+  - name: shop_user_id
+    type: BIGINT
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 登录的 Shop 用户 ID，引用 shop_users.id。
+  - name: token_hash
+    type: BYTEA
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 登录 token 的哈希值，不存明文 token。
+  - name: expires_at
+    type: TIMESTAMPTZ
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 会话过期时间。
+  - name: revoked_at
+    type: TIMESTAMPTZ
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 会话撤销时间，非空表示已登出或失效。
+  - name: created_at
+    type: TIMESTAMPTZ
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 会话创建时间。
+primary_key: id
+cached: false
+properties:
+  description: Shop 小程序登录会话表，用于 Bearer token 鉴权和会话有效性校验。

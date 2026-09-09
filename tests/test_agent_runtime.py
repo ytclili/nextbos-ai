@@ -114,6 +114,7 @@ async def test_run_graph_passes_memory_store_and_langgraph_user_id(monkeypatch) 
         model_options=model_options,
         session_factory=FakeSessionFactory(),
         settings=Settings(
+            wren_project_path="",
             summary_max_tokens=1200,
             summary_trigger_tokens=900,
             summary_max_output_tokens=300,
@@ -238,7 +239,7 @@ async def test_run_graph_restores_messages_from_postgres_when_checkpoint_is_miss
         message="我的好朋友是谁",
         model_options=model_options,
         session_factory=FakeSessionFactory(),
-        settings=Settings(),
+        settings=Settings(wren_project_path=""),
         memory_store="memory-store",
     )
 
@@ -335,7 +336,7 @@ async def test_stream_graph_uses_langgraph_astream_and_yields_final_state(monkey
             message="今天吃什么？",
             model_options=ChatModelOptions(),
             session_factory=FakeSessionFactory(),
-            settings=Settings(),
+            settings=Settings(wren_project_path=""),
             memory_store="memory-store",
         )
     ]

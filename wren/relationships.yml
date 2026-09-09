@@ -1,0 +1,241 @@
+relationships:
+  - name: shop_user_identities_user
+    models:
+      - shop_user_identities
+      - shop_users
+    join_type: MANY_TO_ONE
+    condition: shop_user_identities.tenant_id = shop_users.tenant_id AND shop_user_identities.shop_user_id = shop_users.id
+
+  - name: shop_sessions_user
+    models:
+      - shop_sessions
+      - shop_users
+    join_type: MANY_TO_ONE
+    condition: shop_sessions.tenant_id = shop_users.tenant_id AND shop_sessions.shop_user_id = shop_users.id
+
+  - name: shop_user_customer_bindings_user
+    models:
+      - shop_user_customer_bindings
+      - shop_users
+    join_type: MANY_TO_ONE
+    condition: shop_user_customer_bindings.tenant_id = shop_users.tenant_id AND shop_user_customer_bindings.shop_user_id = shop_users.id
+
+  - name: shop_user_customer_bindings_customer
+    models:
+      - shop_user_customer_bindings
+      - wms_customers
+    join_type: MANY_TO_ONE
+    condition: shop_user_customer_bindings.tenant_id = wms_customers.tenant_id AND shop_user_customer_bindings.wms_customer_id = wms_customers.id
+
+  - name: shop_customer_binding_codes_customer
+    models:
+      - shop_customer_binding_codes
+      - wms_customers
+    join_type: MANY_TO_ONE
+    condition: shop_customer_binding_codes.tenant_id = wms_customers.tenant_id AND shop_customer_binding_codes.wms_customer_id = wms_customers.id
+
+  - name: shop_user_addresses_user
+    models:
+      - shop_user_addresses
+      - shop_users
+    join_type: MANY_TO_ONE
+    condition: shop_user_addresses.tenant_id = shop_users.tenant_id AND shop_user_addresses.shop_user_id = shop_users.id
+
+  - name: shop_agent_accounts_user
+    models:
+      - shop_agent_accounts
+      - shop_users
+    join_type: MANY_TO_ONE
+    condition: shop_agent_accounts.tenant_id = shop_users.tenant_id AND shop_agent_accounts.shop_user_id = shop_users.id
+
+  - name: shop_agent_accounts_created_by_user
+    models:
+      - shop_agent_accounts
+      - users
+    join_type: MANY_TO_ONE
+    condition: shop_agent_accounts.tenant_id = users.tenant_id AND shop_agent_accounts.created_by = users.id
+
+  - name: shop_agent_accounts_updated_by_user
+    models:
+      - shop_agent_accounts
+      - users
+    join_type: MANY_TO_ONE
+    condition: shop_agent_accounts.tenant_id = users.tenant_id AND shop_agent_accounts.updated_by = users.id
+
+  - name: shop_order_attributions_outbound_order
+    models:
+      - shop_order_attributions
+      - wms_outbound_orders
+    join_type: MANY_TO_ONE
+    condition: shop_order_attributions.tenant_id = wms_outbound_orders.tenant_id AND shop_order_attributions.wms_outbound_order_id = wms_outbound_orders.id
+
+  - name: shop_order_attributions_customer_user
+    models:
+      - shop_order_attributions
+      - shop_users
+    join_type: MANY_TO_ONE
+    condition: shop_order_attributions.tenant_id = shop_users.tenant_id AND shop_order_attributions.customer_shop_user_id = shop_users.id
+
+  - name: shop_order_attributions_operator_user
+    models:
+      - shop_order_attributions
+      - shop_users
+    join_type: MANY_TO_ONE
+    condition: shop_order_attributions.tenant_id = shop_users.tenant_id AND shop_order_attributions.operator_shop_user_id = shop_users.id
+
+  - name: wms_cart_items_cart
+    models:
+      - wms_cart_items
+      - wms_carts
+    join_type: MANY_TO_ONE
+    condition: wms_cart_items.tenant_id = wms_carts.tenant_id AND wms_cart_items.cart_id = wms_carts.id
+
+  - name: wms_cart_items_item
+    models:
+      - wms_cart_items
+      - wms_items
+    join_type: MANY_TO_ONE
+    condition: wms_cart_items.tenant_id = wms_items.tenant_id AND wms_cart_items.item_id = wms_items.id
+
+  - name: wms_inventory_reservations_cart_item
+    models:
+      - wms_inventory_reservations
+      - wms_cart_items
+    join_type: MANY_TO_ONE
+    condition: wms_inventory_reservations.tenant_id = wms_cart_items.tenant_id AND wms_inventory_reservations.cart_item_id = wms_cart_items.id
+
+  - name: wms_item_categories_parent
+    models:
+      - wms_item_categories
+      - wms_item_categories
+    join_type: MANY_TO_ONE
+    condition: wms_item_categories.tenant_id = wms_item_categories_parent.tenant_id AND wms_item_categories.parent_id = wms_item_categories_parent.id
+
+  - name: wms_item_inventory_policies_item
+    models:
+      - wms_item_inventory_policies
+      - wms_items
+    join_type: MANY_TO_ONE
+    condition: wms_item_inventory_policies.tenant_id = wms_items.tenant_id AND wms_item_inventory_policies.item_id = wms_items.id
+
+  - name: wms_item_extras_item
+    models:
+      - wms_item_extras
+      - wms_items
+    join_type: MANY_TO_ONE
+    condition: wms_item_extras.tenant_id = wms_items.tenant_id AND wms_item_extras.item_id = wms_items.id
+
+  - name: wms_outbound_orders_warehouse
+    models:
+      - wms_outbound_orders
+      - wms_warehouses
+    join_type: MANY_TO_ONE
+    condition: wms_outbound_orders.tenant_id = wms_warehouses.tenant_id AND wms_outbound_orders.warehouse_id = wms_warehouses.id
+
+  - name: wms_outbound_orders_owner_customer
+    models:
+      - wms_outbound_orders
+      - wms_customers
+    join_type: MANY_TO_ONE
+    condition: wms_outbound_orders.tenant_id = wms_customers.tenant_id AND wms_outbound_orders.owner_id = wms_customers.id
+
+  - name: wms_outbound_orders_customer
+    models:
+      - wms_outbound_orders
+      - wms_customers
+    join_type: MANY_TO_ONE
+    condition: wms_outbound_orders.tenant_id = wms_customers.tenant_id AND wms_outbound_orders.customer_id = wms_customers.id
+
+  - name: wms_outbound_order_delivery_order
+    models:
+      - wms_outbound_order_delivery
+      - wms_outbound_orders
+    join_type: MANY_TO_ONE
+    condition: wms_outbound_order_delivery.tenant_id = wms_outbound_orders.tenant_id AND wms_outbound_order_delivery.outbound_order_id = wms_outbound_orders.id
+
+  - name: wms_outbound_order_delivery_shipping_address
+    models:
+      - wms_outbound_order_delivery
+      - wms_customer_shipping_addresses
+    join_type: MANY_TO_ONE
+    condition: wms_outbound_order_delivery.tenant_id = wms_customer_shipping_addresses.tenant_id AND wms_outbound_order_delivery.delivery_address_id = wms_customer_shipping_addresses.id
+
+  - name: wms_outbound_order_transport_order
+    models:
+      - wms_outbound_order_transport
+      - wms_outbound_orders
+    join_type: MANY_TO_ONE
+    condition: wms_outbound_order_transport.tenant_id = wms_outbound_orders.tenant_id AND wms_outbound_order_transport.outbound_order_id = wms_outbound_orders.id
+
+  - name: wms_outbound_order_transport_pickup_unit
+    models:
+      - wms_outbound_order_transport
+      - wms_customers
+    join_type: MANY_TO_ONE
+    condition: wms_outbound_order_transport.tenant_id = wms_customers.tenant_id AND wms_outbound_order_transport.pickup_unit_id = wms_customers.id
+
+  - name: wms_outbound_order_transport_shipper_unit
+    models:
+      - wms_outbound_order_transport
+      - wms_customers
+    join_type: MANY_TO_ONE
+    condition: wms_outbound_order_transport.tenant_id = wms_customers.tenant_id AND wms_outbound_order_transport.shipper_unit_id = wms_customers.id
+
+  - name: wms_outbound_order_commercial_order
+    models:
+      - wms_outbound_order_commercial
+      - wms_outbound_orders
+    join_type: MANY_TO_ONE
+    condition: wms_outbound_order_commercial.tenant_id = wms_outbound_orders.tenant_id AND wms_outbound_order_commercial.outbound_order_id = wms_outbound_orders.id
+
+  - name: wms_outbound_order_totals_order
+    models:
+      - wms_outbound_order_totals
+      - wms_outbound_orders
+    join_type: MANY_TO_ONE
+    condition: wms_outbound_order_totals.tenant_id = wms_outbound_orders.tenant_id AND wms_outbound_order_totals.outbound_order_id = wms_outbound_orders.id
+
+  - name: wms_outbound_order_lines_order
+    models:
+      - wms_outbound_order_lines
+      - wms_outbound_orders
+    join_type: MANY_TO_ONE
+    condition: wms_outbound_order_lines.tenant_id = wms_outbound_orders.tenant_id AND wms_outbound_order_lines.outbound_order_id = wms_outbound_orders.id
+
+  - name: wms_outbound_order_lines_item
+    models:
+      - wms_outbound_order_lines
+      - wms_items
+    join_type: MANY_TO_ONE
+    condition: wms_outbound_order_lines.tenant_id = wms_items.tenant_id AND wms_outbound_order_lines.item_id = wms_items.id
+
+  - name: wms_outbound_order_lines_planned_location
+    models:
+      - wms_outbound_order_lines
+      - wms_warehouse_locations
+    join_type: MANY_TO_ONE
+    condition: wms_outbound_order_lines.tenant_id = wms_warehouse_locations.tenant_id AND wms_outbound_order_lines.planned_location_id = wms_warehouse_locations.id
+
+  - name: wms_outbound_order_lines_actual_location
+    models:
+      - wms_outbound_order_lines
+      - wms_warehouse_locations
+    join_type: MANY_TO_ONE
+    condition: wms_outbound_order_lines.tenant_id = wms_warehouse_locations.tenant_id AND wms_outbound_order_lines.actual_location_id = wms_warehouse_locations.id
+
+  - name: wms_outbound_order_events_order
+    models:
+      - wms_outbound_order_events
+      - wms_outbound_orders
+    join_type: MANY_TO_ONE
+    condition: wms_outbound_order_events.tenant_id = wms_outbound_orders.tenant_id AND wms_outbound_order_events.outbound_order_id = wms_outbound_orders.id
+
+non_fk_relationships:
+  - name: wms_items_category
+    models:
+      - wms_items
+      - wms_item_categories
+    join_type: MANY_TO_ONE
+    condition: wms_items.tenant_id = wms_item_categories.tenant_id AND wms_items.category_id = wms_item_categories.id::text
+    properties:
+      description: 当前数据库没有外键约束；wms_items.category_id 是 VARCHAR(100)，wms_item_categories.id 是 BIGINT，因此只能作为业务推断关系使用。

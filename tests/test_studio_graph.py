@@ -26,6 +26,7 @@ def test_create_studio_graph_builds_graph_with_studio_runtime(monkeypatch) -> No
         captured["wren_context_client"] = wren_context_client
         return "compiled-graph"
 
+    monkeypatch.setattr(studio_graph, "get_settings", lambda: Settings(wren_project_path=""))
     monkeypatch.setattr(studio_graph, "build_graph", fake_build_graph)
 
     graph = studio_graph.create_studio_graph()

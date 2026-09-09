@@ -1,0 +1,157 @@
+name: wms_customers
+table_reference:
+  catalog: ""
+  schema: public
+  table: wms_customers
+columns:
+  - name: id
+    type: BIGINT
+    is_calculated: false
+    not_null: true
+    is_primary_key: true
+    properties:
+      description: WMS 客户主键，小程序用户绑定客户和小程序订单 customer_id/owner_id 使用该字段。
+  - name: tenant_id
+    type: BIGINT
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 租户 ID，引用 tenants.id，用于多租户隔离。
+  - name: code
+    type: VARCHAR(50)
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 客户编码，租户内按 upper(code) 唯一，编码不允许更新。
+  - name: name
+    type: VARCHAR(200)
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 客户名称，小程序绑定信息、代理客户信息和订单客户展示使用该字段。
+  - name: short_name
+    type: VARCHAR(100)
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 客户简称。
+  - name: customer_type
+    type: VARCHAR(24)
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 客户类型，可选 retail、wholesale、carrier。
+  - name: status
+    type: VARCHAR(16)
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 客户状态，可选 enabled、disabled；小程序有效绑定要求客户可用。
+  - name: settlement
+    type: VARCHAR(100)
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 结算方式。
+  - name: company_nature
+    type: VARCHAR(24)
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 公司性质，可选 private、stateOwned、foreign、jointVenture、other。
+  - name: tax_number
+    type: VARCHAR(64)
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 税号。
+  - name: remark
+    type: VARCHAR(1000)
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 客户备注。
+  - name: mixed_load_allowed
+    type: BOOLEAN
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 是否允许混载。
+  - name: putaway_strategy
+    type: VARCHAR(32)
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 上架策略，可选 fixedLocation、partiallyFilledFirst、emptyLocationFirst。
+  - name: putaway_area
+    type: VARCHAR(32)
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 上架区域，目前约束值为 putawayArea。
+  - name: picking_strategy
+    type: VARCHAR(40)
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 拣选策略，可选 shelfLifeFirst、fifo、lifo、fixedLocation 等。
+  - name: picking_area
+    type: VARCHAR(32)
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 拣货区域，目前约束值为 pickingArea。
+  - name: version
+    type: INTEGER
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 并发更新版本号。
+  - name: created_by
+    type: BIGINT
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 创建客户的后台用户 ID。
+  - name: updated_by
+    type: BIGINT
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 最后更新客户的后台用户 ID。
+  - name: created_at
+    type: TIMESTAMPTZ
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 客户创建时间。
+  - name: updated_at
+    type: TIMESTAMPTZ
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 客户最后更新时间。
+primary_key: id
+cached: false
+properties:
+  description: WMS 客户主档表，小程序用户绑定、代理目标客户解析和小程序订单客户归属依赖该表。

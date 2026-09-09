@@ -9,7 +9,7 @@ from app.agent.model_runtime import AgentModelRuntime
 from app.agent.nodes.clarify import clarify
 from app.agent.nodes.intent import create_intent_node
 from app.agent.nodes.respond import create_respond_node
-from app.agent.nodes.route import route_after_intent
+from app.agent.nodes.route import route_after_intent, route_after_sql_plan
 from app.agent.nodes.sql_plan import create_sql_plan_node
 from app.agent.nodes.sql_validate import create_sql_validate_node
 from app.agent.nodes.summarize import SummaryOptions, create_summarize_node
@@ -45,6 +45,7 @@ def build_graph(
 
     summarize -> intent -> direct_answer -> respond -> tools -> final_respond -> END
                         -> wren_context -> sql_plan -> sql_validate -> END
+                                                    -> clarify -> END
                         -> clarify -> END
 
     summarize 节点负责用 LangMem 官方 SummarizationNode 压缩过长上下文；
@@ -113,7 +114,14 @@ def build_graph(
             },
         )
         builder.add_edge("wren_context", "sql_plan")
-        builder.add_edge("sql_plan", "sql_validate")
+        builder.add_conditional_edges(
+            "sql_plan",
+            route_after_sql_plan,
+            {
+                "sql_validate": "sql_validate",
+                "clarify": "clarify",
+            },
+        )
         builder.add_edge("sql_validate", END)
         builder.add_edge("clarify", END)
     builder.add_conditional_edges(

@@ -1,0 +1,59 @@
+name: shop_order_attributions
+table_reference:
+  catalog: ""
+  schema: public
+  table: shop_order_attributions
+columns:
+  - name: id
+    type: BIGINT
+    is_calculated: false
+    not_null: true
+    is_primary_key: true
+    properties:
+      description: Shop 订单归属记录主键。
+  - name: tenant_id
+    type: BIGINT
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 租户 ID。
+  - name: wms_outbound_order_id
+    type: BIGINT
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 小程序订单对应的 WMS 出库单 ID，引用 wms_outbound_orders.id。
+  - name: customer_shop_user_id
+    type: BIGINT
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 实际客户 Shop 用户 ID；代理下单时为被代下单用户。
+  - name: operator_shop_user_id
+    type: BIGINT
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 实际操作下单的 Shop 用户 ID；自购时与 customer_shop_user_id 相同。
+  - name: order_mode
+    type: VARCHAR(16)
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 下单模式，可选 self、proxy。
+  - name: created_at
+    type: TIMESTAMPTZ
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 归属记录创建时间。
+primary_key: id
+cached: false
+properties:
+  description: 小程序订单归属表，用于记录自购或业务代理代下单关系。

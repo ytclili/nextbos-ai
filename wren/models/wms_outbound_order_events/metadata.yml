@@ -1,0 +1,80 @@
+name: wms_outbound_order_events
+table_reference:
+  catalog: ""
+  schema: public
+  table: wms_outbound_order_events
+columns:
+  - name: id
+    type: BIGINT
+    is_calculated: false
+    not_null: true
+    is_primary_key: true
+    properties:
+      description: 出库单事件主键。
+  - name: tenant_id
+    type: BIGINT
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 租户 ID。
+  - name: outbound_order_id
+    type: BIGINT
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 出库单 ID，引用 wms_outbound_orders.id。
+  - name: event_type
+    type: wms_outbound_order_event_type
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 订单事件类型，例如 created、audited、shipped、cancelled。
+  - name: from_status
+    type: wms_outbound_order_status
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 状态变更前状态。
+  - name: to_status
+    type: wms_outbound_order_status
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 状态变更后状态；小程序下单创建事件写入 order_entry。
+  - name: operator_id
+    type: BIGINT
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 操作人用户 ID。
+  - name: operator_name_snapshot
+    type: VARCHAR(100)
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 操作人姓名快照。
+  - name: note
+    type: VARCHAR(1000)
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 事件备注。
+  - name: created_at
+    type: TIMESTAMPTZ
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 事件创建时间。
+primary_key: id
+cached: false
+properties:
+  description: WMS 出库单事件表，记录小程序订单创建及后续 WMS 状态流转事件。

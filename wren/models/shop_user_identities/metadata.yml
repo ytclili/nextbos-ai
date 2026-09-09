@@ -1,0 +1,73 @@
+name: shop_user_identities
+table_reference:
+  catalog: ""
+  schema: public
+  table: shop_user_identities
+columns:
+  - name: id
+    type: BIGINT
+    is_calculated: false
+    not_null: true
+    is_primary_key: true
+    properties:
+      description: 第三方身份记录主键。
+  - name: tenant_id
+    type: BIGINT
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 租户 ID。
+  - name: shop_user_id
+    type: BIGINT
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 关联的 Shop 用户 ID，引用 shop_users.id。
+  - name: provider
+    type: VARCHAR(32)
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 身份提供方，例如 wechat。
+  - name: app_id
+    type: VARCHAR(128)
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 微信小程序 AppID。
+  - name: openid
+    type: VARCHAR(128)
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 微信 OpenID，用于识别同一小程序下的用户。
+  - name: unionid
+    type: VARCHAR(128)
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 微信 UnionID，有开放平台绑定时用于跨应用识别。
+  - name: created_at
+    type: TIMESTAMPTZ
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 身份记录创建时间。
+  - name: updated_at
+    type: TIMESTAMPTZ
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 身份记录最后更新时间。
+primary_key: id
+cached: false
+properties:
+  description: Shop 小程序第三方登录身份表，用于保存微信 openid、unionid 与 Shop 用户的绑定关系。

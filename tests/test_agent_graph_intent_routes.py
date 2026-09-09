@@ -215,7 +215,6 @@ async def test_graph_routes_business_data_to_wren_context() -> None:
     message_texts = [str(message.content) for message in result["messages"]]
     assert any("WrenAI 上下文查询" in text for text in message_texts)
     assert any("分析本月华东区域销售额下降原因" in text for text in message_texts)
-    assert "SQL dry-run 校验失败" in result["messages"][-1].content
     assert result["sql_generation_plan"]["preferred_candidate_name"] == "primary"
     assert result["sql_validation_result"]["status"] == "failed"
     assert result["sql_validation_result"]["validated_sql"] is None
@@ -306,10 +305,48 @@ async def test_graph_business_data_keeps_state_when_wren_context_fails() -> None
     assert result["wren_context"]["raw"] == {"error": "Wren project 配置无效"}
     message_texts = [str(message.content) for message in result["messages"]]
     assert any("WrenAI 上下文查询失败" in text for text in message_texts)
-    assert "SQL dry-run 校验失败" in result["messages"][-1].content
     assert result["sql_generation_plan"]["status"] == "ready_for_dry_run"
     assert result["sql_validation_result"]["status"] == "failed"
     assert model_runtime.chat_model.calls == []
+
+
+@pytest.mark.asyncio
+async def test_graph_routes_unready_sql_plan_to_clarify_without_validation() -> None:
+    """SQL 计划需要澄清时，不应该继续进入 Wren dry-plan / dry-run。"""
+
+    clarification_question = "请提供当前登录用户的 Shop 用户 ID 和租户 ID。"
+    model_runtime = FakeAgentModelRuntime(
+        _decision(
+            intent_type="business_analysis",
+            needs_business_data=True,
+            question_rewrite="查询当前用户昨天所下订单中的商品明细。",
+        ),
+        sql_plan=SqlGenerationPlan(
+            status="needs_clarification",
+            query_intent="lookup",
+            question="查询当前用户昨天所下订单中的商品明细。",
+            planning_summary="缺少当前用户和租户信息，无法定位小程序订单。",
+            clarification_question=clarification_question,
+            confidence=0.7,
+        ),
+    )
+    wren_context_client = FakeWrenContextClient()
+    graph = build_graph(
+        model_runtime=model_runtime,
+        wren_context_client=wren_context_client,
+    )
+
+    result = await graph.ainvoke(
+        {
+            "messages": [HumanMessage(content="查询我昨天所下订单中的商品明细。")],
+            "model_options": None,
+        }
+    )
+
+    assert result["sql_generation_plan"]["status"] == "needs_clarification"
+    assert "sql_validation_result" not in result
+    assert wren_context_client.sql_validation_calls == []
+    assert result["messages"][-1].content == clarification_question
 
 
 @pytest.mark.asyncio

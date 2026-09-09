@@ -1,0 +1,234 @@
+name: wms_items
+table_reference:
+  catalog: ""
+  schema: public
+  table: wms_items
+columns:
+  - name: id
+    type: BIGINT
+    is_calculated: false
+    not_null: true
+    is_primary_key: true
+    properties:
+      description: 商品货品主键，小程序 goods_id 对应该字段。
+  - name: tenant_id
+    type: BIGINT
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 租户 ID。
+  - name: code
+    type: VARCHAR(50)
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 货品编号，租户内不区分大小写唯一。
+  - name: customer_code
+    type: VARCHAR(200)
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 货主或客户编码。
+  - name: description
+    type: VARCHAR(200)
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 商品名称或货品描述，小程序商品名称来自该字段。
+  - name: item_category
+    type: VARCHAR(100)
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 商品分类文本。
+  - name: foreign_name
+    type: VARCHAR(200)
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 外文名称。
+  - name: brand
+    type: VARCHAR(100)
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 商品品牌。
+  - name: barcode
+    type: VARCHAR(100)
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 商品条形码。
+  - name: unit_barcode
+    type: VARCHAR(100)
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 小单位条形码。
+  - name: freshness
+    type: INTEGER
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 鲜度控制值。
+  - name: serial_tracked
+    type: BOOLEAN
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 是否启用序列号管理。
+  - name: spec
+    type: VARCHAR(100)
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 商品规格，小程序商品规格来自该字段。
+  - name: package_spec
+    type: VARCHAR(100)
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 包装规格。
+  - name: item_group
+    type: VARCHAR(100)
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 货品组。
+  - name: min_package_unit
+    type: VARCHAR(40)
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 最小包装单位，小程序优先作为商品单位。
+  - name: middle_unit
+    type: VARCHAR(40)
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 中包单位。
+  - name: middle_qty
+    type: NUMERIC(18,6)
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 中包数量。
+  - name: carton_unit
+    type: VARCHAR(40)
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 大包单位，小程序在最小包装单位为空时可作为单位回退。
+  - name: carton_qty
+    type: NUMERIC(18,6)
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 大包数量。
+  - name: ti
+    type: INTEGER
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 每层箱数。
+  - name: hi
+    type: INTEGER
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 堆码层数。
+  - name: case_count
+    type: NUMERIC(18,6)
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 每托数量。
+  - name: shelf_life_days
+    type: INTEGER
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 保质期天数。
+  - name: shelf_enabled
+    type: BOOLEAN
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 是否启用保质期管理。
+  - name: category_id
+    type: VARCHAR(100)
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 商品分类 ID 字段；当前按字符串保存分类标识。
+  - name: status
+    type: VARCHAR(16)
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 商品启停状态，可选 enabled、disabled；小程序只展示 enabled 商品。
+  - name: version
+    type: INTEGER
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 并发更新版本号。
+  - name: created_by
+    type: BIGINT
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 创建商品的 WMS 管理员用户 ID。
+  - name: updated_by
+    type: BIGINT
+    is_calculated: false
+    not_null: false
+    is_primary_key: false
+    properties:
+      description: 最后更新商品的 WMS 管理员用户 ID。
+  - name: created_at
+    type: TIMESTAMPTZ
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 商品创建时间。
+  - name: updated_at
+    type: TIMESTAMPTZ
+    is_calculated: false
+    not_null: true
+    is_primary_key: false
+    properties:
+      description: 商品最后更新时间。
+primary_key: id
+cached: false
+properties:
+  description: WMS 商品主档表，小程序商品列表、购物车和订单明细均引用该表。
