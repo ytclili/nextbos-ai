@@ -104,7 +104,9 @@ async def chat_stream(request: ChatRequest, http: Request) -> StreamingResponse:
 
     返回 text/event-stream：
     - start：请求开始；
+    - agent_step：agent 节点进度，例如 wren_context / sql_plan / sql_validate / sql_execute；
     - token：模型增量文本；
+    - chart：图表请求成功时返回前端可渲染的 ECharts option；
     - done：模型完整回复已经生成并落库；
     - error：流式过程中出现异常。
     """

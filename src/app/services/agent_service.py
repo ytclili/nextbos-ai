@@ -131,6 +131,7 @@ class AgentService:
 
         accumulated_tokens: list[str] = []
         final_state: dict[str, Any] = {}
+        chart_emitted = False
 
         async for event in stream_graph(
             self.checkpointer,
@@ -148,6 +149,11 @@ class AgentService:
                     accumulated_tokens.append(token)
                     yield ("token", {"type": "text", "content": token})
             elif event.mode == "updates":
+                for agent_step_event in _extract_agent_step_events(event):
+                    yield agent_step_event
+                for chart_event in _extract_chart_update_events(event):
+                    chart_emitted = True
+                    yield chart_event
                 for tool_event in _extract_tool_events(event):
                     yield tool_event
             elif event.mode == "final_state":
@@ -168,6 +174,8 @@ class AgentService:
             user_id,
             len(content),
         )
+        if not chart_emitted and (chart_event := _extract_chart_event(final_state)):
+            yield chart_event
         yield ("done", {"content": content})
 
     async def _append_user_message(
@@ -247,6 +255,241 @@ def _extract_tool_events(event: GraphStreamEvent) -> list[tuple[str, dict[str, A
         elif node_name == "tools":
             events.extend(_tool_result_events(update))
     return events
+
+
+def _extract_agent_step_events(event: GraphStreamEvent) -> list[tuple[str, dict[str, Any]]]:
+    """从 LangGraph updates 事件中提取前端可展示的 agent 节点进度。"""
+
+    if not isinstance(event.data, dict):
+        return []
+
+    events: list[tuple[str, dict[str, Any]]] = []
+    for node_name, update in event.data.items():
+        step = _agent_step_from_update(str(node_name), update)
+        if step:
+            events.append(("agent_step", step))
+    return events
+
+
+def _extract_chart_update_events(event: GraphStreamEvent) -> list[tuple[str, dict[str, Any]]]:
+    """从 chart_spec 节点 update 中提取前端可立即渲染的图表事件。"""
+
+    if not isinstance(event.data, dict):
+        return []
+
+    events: list[tuple[str, dict[str, Any]]] = []
+    for node_name, update in event.data.items():
+        if node_name != "chart_spec" or not isinstance(update, dict):
+            continue
+        chart_event = _chart_event_from_spec_result(update.get("chart_spec_result"))
+        if chart_event:
+            events.append(chart_event)
+    return events
+
+
+def _agent_step_from_update(node_name: str, update: Any) -> dict[str, Any] | None:
+    if not isinstance(update, dict):
+        return None
+
+    if node_name == "wren_context":
+        context = _dict_value(update, "wren_context")
+        raw = context.get("raw") if isinstance(context.get("raw"), dict) else {}
+        status = "failed" if raw.get("error") else "completed"
+        return _agent_step(
+            node_name,
+            status,
+            "Wren 业务上下文已获取" if status == "completed" else "Wren 业务上下文获取失败",
+            {
+                "model_count": len(context.get("models") or []),
+                "metric_count": len(context.get("metrics") or []),
+                "join_count": len(context.get("joins") or []),
+                "rule_count": len(context.get("business_rules") or []),
+                "sql_example_count": len(context.get("sql_examples") or []),
+                "error": raw.get("error"),
+            },
+        )
+
+    if node_name == "sql_plan":
+        plan = _dict_value(update, "sql_generation_plan")
+        status = str(plan.get("status") or "completed")
+        return _agent_step(
+            node_name,
+            status,
+            _status_message(
+                status,
+                {
+                    "ready_for_dry_run": "SQL 计划已生成",
+                    "needs_clarification": "SQL 计划需要补充信息",
+                    "cannot_plan": "SQL 计划无法生成",
+                },
+                "SQL 计划节点已完成",
+            ),
+            {
+                "query_intent": plan.get("query_intent"),
+                "candidate_count": len(plan.get("candidates") or []),
+                "preferred_candidate_name": plan.get("preferred_candidate_name"),
+                "clarification_question": plan.get("clarification_question"),
+                "confidence": plan.get("confidence"),
+            },
+        )
+
+    if node_name == "sql_validate":
+        result = _dict_value(update, "sql_validation_result")
+        status = str(result.get("status") or "completed")
+        issues = result.get("issues") or []
+        return _agent_step(
+            node_name,
+            status,
+            _status_message(
+                status,
+                {
+                    "passed": "SQL 校验通过",
+                    "needs_repair": "SQL 校验需要修复",
+                    "failed": "SQL 校验失败",
+                },
+                "SQL 校验节点已完成",
+            ),
+            {
+                "candidate_name": result.get("candidate_name"),
+                "issue_count": len(issues),
+                "issues": [_compact_issue(issue) for issue in issues],
+            },
+        )
+
+    if node_name == "sql_execute":
+        result = _dict_value(update, "sql_execution_result")
+        status = str(result.get("status") or "completed")
+        error = result.get("error") if isinstance(result.get("error"), dict) else {}
+        return _agent_step(
+            node_name,
+            status,
+            _status_message(
+                status,
+                {
+                    "succeeded": "SQL 执行成功",
+                    "failed": "SQL 执行失败",
+                    "skipped": "SQL 执行已跳过",
+                },
+                "SQL 执行节点已完成",
+            ),
+            {
+                "query_id": result.get("query_id"),
+                "row_count": result.get("row_count", 0),
+                "column_count": len(result.get("columns") or []),
+                "truncated": result.get("truncated", False),
+                "error": error.get("message"),
+            },
+        )
+
+    if node_name == "chart_plan":
+        result = _dict_value(update, "chart_plan_result")
+        status = str(result.get("status") or "planned")
+        return _agent_step(
+            node_name,
+            status,
+            "图表规划已生成" if status == "planned" else "图表规划未生成",
+            {
+                "chart_type": result.get("chart_type"),
+                "title": result.get("title"),
+                "x_field": _encoding_field(result.get("x")),
+                "y_field": _encoding_field(result.get("y")),
+                "message": result.get("message"),
+            },
+        )
+
+    if node_name == "chart_spec":
+        result = _dict_value(update, "chart_spec_result")
+        status = str(result.get("status") or "completed")
+        chart = result.get("chart") if isinstance(result.get("chart"), dict) else {}
+        return _agent_step(
+            node_name,
+            status,
+            "ECharts 配置已生成" if status == "succeeded" else "ECharts 配置未生成",
+            {
+                "chart_type": chart.get("chart_type"),
+                "title": chart.get("title"),
+                "row_count": chart.get("row_count", 0),
+                "message": result.get("message"),
+            },
+        )
+
+    return None
+
+
+def _agent_step(
+    node: str,
+    status: str,
+    message: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "type": "agent_step",
+        "node": node,
+        "status": status,
+        "message": message,
+        "payload": _drop_none_values(payload),
+    }
+
+
+def _dict_value(payload: dict[str, Any], key: str) -> dict[str, Any]:
+    value = payload.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def _status_message(status: str, messages: dict[str, str], fallback: str) -> str:
+    return messages.get(status, fallback)
+
+
+def _compact_issue(issue: Any) -> dict[str, Any]:
+    if not isinstance(issue, dict):
+        return {"message": str(issue)}
+    return _drop_none_values(
+        {
+            "issue_type": issue.get("issue_type"),
+            "severity": issue.get("severity"),
+            "message": issue.get("message"),
+            "suggested_fix": issue.get("suggested_fix"),
+        }
+    )
+
+
+def _encoding_field(encoding: Any) -> str | None:
+    if not isinstance(encoding, dict):
+        return None
+    field = encoding.get("field")
+    return str(field) if field else None
+
+
+def _drop_none_values(payload: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in payload.items() if value is not None}
+
+
+def _extract_chart_event(state: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+    """从最终 LangGraph state 中提取前端图表事件。"""
+
+    return _chart_event_from_spec_result(state.get("chart_spec_result"))
+
+
+def _chart_event_from_spec_result(chart_spec_result: Any) -> tuple[str, dict[str, Any]] | None:
+    if not isinstance(chart_spec_result, dict):
+        return None
+    if chart_spec_result.get("status") != "succeeded":
+        return None
+
+    chart = chart_spec_result.get("chart")
+    if not isinstance(chart, dict):
+        return None
+
+    render_type = str(chart.get("type") or "echarts")
+    return (
+        "chart",
+        {
+            "type": "chart",
+            "content_type": "echarts_option",
+            "render_type": render_type,
+            **{key: value for key, value in chart.items() if key != "type"},
+        },
+    )
 
 
 def _tool_start_events(update: Any) -> list[tuple[str, dict[str, Any]]]:

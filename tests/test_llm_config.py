@@ -2,7 +2,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.core.config import Settings
+from app.core.config import ENV_FILE, PROJECT_ROOT, Settings
 from app.llm.chat_models import create_langchain_chat_model
 from app.llm.config_resolver import ModelConfigResolver, ModelSelection, RequestedModelParams
 from app.llm.models import ModelProfile, ProviderCredential
@@ -41,6 +41,14 @@ class InMemoryModelRepository:
             model_profile_id=snapshot.model_profile_id,
             model_profile_version=snapshot.model_profile_version,
         )
+
+
+def test_settings_reads_env_from_project_root() -> None:
+    """Settings 应该固定读取项目根目录 .env，不受 uvicorn 启动目录影响。"""
+
+    assert PROJECT_ROOT.name == "nextbos-ai"
+    assert ENV_FILE == PROJECT_ROOT / ".env"
+    assert Settings.model_config["env_file"] == ENV_FILE
 
 
 @pytest.mark.asyncio

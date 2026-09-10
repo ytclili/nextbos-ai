@@ -1,7 +1,11 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+ENV_FILE = PROJECT_ROOT / ".env"
 
 
 class Settings(BaseSettings):
@@ -66,7 +70,7 @@ class Settings(BaseSettings):
     # trace 采样率。1.0 = 全采样；生产高流量时可以调低。
     otel_traces_sample_rate: float = Field(default=1.0, ge=0, le=1)
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(env_file=ENV_FILE, env_file_encoding="utf-8", extra="ignore")
 
 
 @lru_cache

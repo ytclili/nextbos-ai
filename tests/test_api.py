@@ -154,6 +154,16 @@ def test_chat_stream_endpoint_returns_sse_events(monkeypatch):
         async def stream_chat(self, **kwargs):
             calls.append(("stream_chat", kwargs))
             yield ("start", {"code": 200, "status": "success", "thread_id": kwargs["thread_id"]})
+            yield (
+                "agent_step",
+                {
+                    "type": "agent_step",
+                    "node": "sql_execute",
+                    "status": "succeeded",
+                    "message": "SQL 执行成功",
+                    "payload": {"row_count": 1},
+                },
+            )
             yield ("token", {"type": "text", "content": "粤"})
             yield (
                 "tool_start",
@@ -172,6 +182,19 @@ def test_chat_stream_endpoint_returns_sse_events(monkeypatch):
                 },
             )
             yield ("token", {"type": "text", "content": "菜"})
+            yield (
+                "chart",
+                {
+                    "type": "chart",
+                    "content_type": "echarts_option",
+                    "render_type": "echarts",
+                    "title": "销售额",
+                    "chart_type": "bar",
+                    "option": {"series": [{"type": "bar", "data": [177.0]}]},
+                    "source_fields": ["sales_amount"],
+                    "row_count": 1,
+                },
+            )
             yield ("done", {"content": "粤菜"})
 
     settings = Settings()
@@ -198,6 +221,10 @@ def test_chat_stream_endpoint_returns_sse_events(monkeypatch):
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     assert 'event: start\ndata: {"code":200,"status":"success","thread_id":"thread-1"}' in body
+    assert (
+        'event: agent_step\ndata: {"type":"agent_step","node":"sql_execute",'
+        '"status":"succeeded","message":"SQL 执行成功","payload":{"row_count":1}}'
+    ) in body
     assert 'event: token\ndata: {"type":"text","content":"粤"}' in body
     assert (
         'event: tool_start\ndata: {"name":"search_memory","tool_call_id":"call-1",'
@@ -208,6 +235,12 @@ def test_chat_stream_endpoint_returns_sse_events(monkeypatch):
         '"status":"success"}'
     ) in body
     assert 'event: token\ndata: {"type":"text","content":"菜"}' in body
+    assert (
+        'event: chart\ndata: {"type":"chart","content_type":"echarts_option",'
+        '"render_type":"echarts","title":"销售额","chart_type":"bar",'
+        '"option":{"series":[{"type":"bar","data":[177.0]}]},'
+        '"source_fields":["sales_amount"],"row_count":1}'
+    ) in body
     assert 'event: done\ndata: {"content":"粤菜"}' in body
     assert calls == [
         (

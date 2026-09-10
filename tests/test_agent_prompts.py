@@ -5,13 +5,14 @@ from app.agent.prompts.renderer import build_system_message, load_system_prompt
 SQL_PLAN_PROMPT_PATH = "src/app/agent/prompts/sql_plan.md"
 
 
-def test_load_system_prompt_reads_shoudanba_business_prompt() -> None:
-    """系统提示词应该从 Markdown 文件读取收单吧业务设定。"""
+def test_load_system_prompt_reads_shop_wms_business_prompt() -> None:
+    """系统提示词应该从 Markdown 文件读取 Shop 和 WMS 业务设定。"""
 
     prompt = load_system_prompt()
 
-    assert "收单吧" in prompt
-    assert "订单 + 回款 + 对账 + 账期风控 + AI 经营报表" in prompt
+    assert "AI 管家" in prompt
+    assert "Shop 小程序" in prompt
+    assert "WMS 仓储" in prompt
     assert "隐私与安全边界" in prompt
 
 
@@ -21,7 +22,7 @@ def test_build_system_message_returns_langchain_system_message() -> None:
     message = build_system_message()
 
     assert isinstance(message, SystemMessage)
-    assert "收单吧" in message.content
+    assert "AI 管家" in message.content
 
 
 def test_sql_plan_prompt_defines_safe_planning_boundary() -> None:

@@ -135,7 +135,7 @@ async def test_respond_node_prepends_system_prompt_without_persisting_it() -> No
     assert model_runtime.chat_model is not None
     model_messages = model_runtime.chat_model.messages
     assert isinstance(model_messages[0], SystemMessage)
-    assert "收单吧" in model_messages[0].content
+    assert "AI 管家" in model_messages[0].content
     assert model_messages[1:] == raw_messages
     assert result["messages"] == [AIMessage(content="假模型回复")]
 

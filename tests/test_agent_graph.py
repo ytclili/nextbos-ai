@@ -225,7 +225,7 @@ async def test_graph_runs_start_to_respond_to_end_with_model_runtime() -> None:
     called_messages = model_runtime.chat_model.calls[0]
     assert isinstance(called_messages, list)
     assert isinstance(called_messages[0], SystemMessage)
-    assert "收单吧" in called_messages[0].content
+    assert "AI 管家" in called_messages[0].content
     assert isinstance(called_messages[1], HumanMessage)
     assert called_messages[1].content == "今天吃什么？"
 

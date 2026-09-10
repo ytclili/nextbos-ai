@@ -258,6 +258,254 @@ async def test_agent_service_streams_tokens_and_persists_final_assistant_message
     ]
 
 
+async def test_agent_service_stream_emits_chart_event_before_done(monkeypatch) -> None:
+    """stream_chat 应该在 chart_spec 节点完成后立即返回 chart 事件。"""
+
+    chart_spec_result = {
+        "status": "succeeded",
+        "chart": {
+            "type": "echarts",
+            "title": "本月各商品分类销售额",
+            "chart_type": "bar",
+            "option": {
+                "xAxis": {"type": "category", "data": ["未分类"]},
+                "yAxis": {"type": "value"},
+                "series": [{"type": "bar", "data": [177.0]}],
+            },
+            "source_fields": ["item_category", "sales_amount"],
+            "row_count": 1,
+        },
+    }
+
+    async def fake_stream_graph(*args, **kwargs):
+        yield agent_service_module.GraphStreamEvent(
+            mode="updates",
+            data={"chart_spec": {"chart_spec_result": chart_spec_result}},
+        )
+        yield agent_service_module.GraphStreamEvent(
+            mode="messages",
+            data=(AIMessageChunk(content="已生成图表"), {}),
+        )
+        yield agent_service_module.GraphStreamEvent(
+            mode="final_state",
+            data={
+                "messages": [AIMessage(content="已生成图表")],
+                "chart_spec_result": chart_spec_result,
+            },
+        )
+
+    created_repositories.clear()
+    monkeypatch.setattr(agent_service_module, "ConversationRepository", FakeConversationRepository)
+    monkeypatch.setattr(agent_service_module, "stream_graph", fake_stream_graph)
+
+    service = AgentService(
+        checkpointer="checkpointer",
+        session_factory="session-factory",
+        settings=Settings(),
+    )
+
+    events = [
+        event
+        async for event in service.stream_chat(
+            thread_id="thread-1",
+            user_id="user-1",
+            message="按商品分类画销售额图",
+        )
+    ]
+
+    assert events == [
+        (
+            "start",
+            {
+                "code": 200,
+                "status": "success",
+                "thread_id": "thread-1",
+                "trace_id": None,
+            },
+        ),
+        (
+            "agent_step",
+            {
+                "type": "agent_step",
+                "node": "chart_spec",
+                "status": "succeeded",
+                "message": "ECharts 配置已生成",
+                "payload": {
+                    "chart_type": "bar",
+                    "title": "本月各商品分类销售额",
+                    "row_count": 1,
+                },
+            },
+        ),
+        (
+            "chart",
+            {
+                "type": "chart",
+                "content_type": "echarts_option",
+                "render_type": "echarts",
+                "title": "本月各商品分类销售额",
+                "chart_type": "bar",
+                "option": {
+                    "xAxis": {"type": "category", "data": ["未分类"]},
+                    "yAxis": {"type": "value"},
+                    "series": [{"type": "bar", "data": [177.0]}],
+                },
+                "source_fields": ["item_category", "sales_amount"],
+                "row_count": 1,
+            },
+        ),
+        ("token", {"type": "text", "content": "已生成图表"}),
+        ("done", {"content": "已生成图表"}),
+    ]
+    assert [event for event, _ in events].count("chart") == 1
+
+
+async def test_agent_service_stream_emits_agent_step_events(monkeypatch) -> None:
+    """stream_chat 应该把关键业务节点 update 转换成 agent_step 事件。"""
+
+    async def fake_stream_graph(*args, **kwargs):
+        yield agent_service_module.GraphStreamEvent(
+            mode="updates",
+            data={
+                "wren_context": {
+                    "wren_context": {
+                        "models": [{"name": "wms_items"}],
+                        "metrics": [],
+                        "joins": [],
+                        "business_rules": [{"name": "tenant_filter"}],
+                        "sql_examples": [],
+                        "raw": {},
+                    }
+                }
+            },
+        )
+        yield agent_service_module.GraphStreamEvent(
+            mode="updates",
+            data={
+                "sql_plan": {
+                    "sql_generation_plan": {
+                        "status": "ready_for_dry_run",
+                        "query_intent": "lookup",
+                        "candidates": [{"name": "primary"}],
+                        "preferred_candidate_name": "primary",
+                        "confidence": 0.8,
+                    }
+                }
+            },
+        )
+        yield agent_service_module.GraphStreamEvent(
+            mode="updates",
+            data={
+                "sql_validate": {
+                    "sql_validation_result": {
+                        "status": "passed",
+                        "candidate_name": "primary",
+                        "issues": [],
+                    }
+                }
+            },
+        )
+        yield agent_service_module.GraphStreamEvent(
+            mode="updates",
+            data={
+                "sql_execute": {
+                    "sql_execution_result": {
+                        "status": "succeeded",
+                        "query_id": "query-1",
+                        "columns": [{"name": "id"}, {"name": "description"}],
+                        "rows": [{"id": 1, "description": "火腿肠"}],
+                        "row_count": 1,
+                        "truncated": False,
+                    }
+                }
+            },
+        )
+        yield agent_service_module.GraphStreamEvent(
+            mode="final_state",
+            data={"messages": [AIMessage(content="查到了")]},
+        )
+
+    created_repositories.clear()
+    monkeypatch.setattr(agent_service_module, "ConversationRepository", FakeConversationRepository)
+    monkeypatch.setattr(agent_service_module, "stream_graph", fake_stream_graph)
+
+    service = AgentService(
+        checkpointer="checkpointer",
+        session_factory="session-factory",
+        settings=Settings(),
+    )
+
+    events = [
+        event
+        async for event in service.stream_chat(
+            thread_id="thread-1",
+            user_id="user-1",
+            message="查询商品列表",
+        )
+    ]
+
+    assert (
+        "agent_step",
+        {
+            "type": "agent_step",
+            "node": "wren_context",
+            "status": "completed",
+            "message": "Wren 业务上下文已获取",
+            "payload": {
+                "model_count": 1,
+                "metric_count": 0,
+                "join_count": 0,
+                "rule_count": 1,
+                "sql_example_count": 0,
+            },
+        },
+    ) in events
+    assert (
+        "agent_step",
+        {
+            "type": "agent_step",
+            "node": "sql_plan",
+            "status": "ready_for_dry_run",
+            "message": "SQL 计划已生成",
+            "payload": {
+                "query_intent": "lookup",
+                "candidate_count": 1,
+                "preferred_candidate_name": "primary",
+                "confidence": 0.8,
+            },
+        },
+    ) in events
+    assert (
+        "agent_step",
+        {
+            "type": "agent_step",
+            "node": "sql_validate",
+            "status": "passed",
+            "message": "SQL 校验通过",
+            "payload": {
+                "candidate_name": "primary",
+                "issue_count": 0,
+                "issues": [],
+            },
+        },
+    ) in events
+    assert (
+        "agent_step",
+        {
+            "type": "agent_step",
+            "node": "sql_execute",
+            "status": "succeeded",
+            "message": "SQL 执行成功",
+            "payload": {
+                "query_id": "query-1",
+                "row_count": 1,
+                "column_count": 2,
+                "truncated": False,
+            },
+        },
+    ) in events
+
+
 async def test_agent_service_stream_skips_summary_model_tokens(monkeypatch) -> None:
     """stream_chat 不应该把内部 summary 节点的 token 推给前端。"""
 
